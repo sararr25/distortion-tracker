@@ -12,7 +12,7 @@ const Map = dynamic(() => import("@/components/Map"), {
   loading: () => <div className="map-loading">INITIALIZING RADAR</div>,
 });
 
-const MARKERS = ["⚡", "◎", "✦", "✶", "◆", "◇", "▰", "▱"];
+const EMOJIS = ["🔥", "⚡", "🎯", "👾", "💀", "🌀", "🐍", "🦊"];
 const FRESH_MS = 10 * 60 * 1000;
 
 function getInitials(name: string) {
@@ -30,11 +30,28 @@ function formatAge(updatedAt: number, now: number) {
   return `${Math.floor(seconds / 60)}m`;
 }
 
+function getDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatDistance(from: FriendLocation | undefined, to: FriendLocation) {
+  if (!from) return "--";
+  return `${Math.round(getDistance(from.lat, from.lng, to.lat, to.lng))}M`;
+}
+
 export default function Home() {
   const { user, loading } = useAuth();
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
-  const [marker, setMarker] = useState("⚡");
+  const [emoji, setEmoji] = useState("🔥");
   const [query, setQuery] = useState("");
   const [authError, setAuthError] = useState("");
   const [panelOpen, setPanelOpen] = useState(false);
@@ -44,7 +61,7 @@ export default function Home() {
     setLocations(data);
   }, []);
 
-  useLocation(Boolean(user), sharing, marker, handleUpdate);
+  useLocation(Boolean(user), sharing, emoji, handleUpdate);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNow(Date.now()), 15000);
@@ -180,7 +197,7 @@ export default function Home() {
 
           <MobileRadar
             friends={friends}
-            now={now}
+            currentLocation={currentLocation}
             open={panelOpen}
             sharing={sharing}
             onToggleOpen={() => setPanelOpen((value) => !value)}
@@ -190,14 +207,14 @@ export default function Home() {
         <CommandCenter
           currentLocation={currentLocation}
           friends={friends}
-          marker={marker}
-          markers={MARKERS}
+          emoji={emoji}
+          emojis={EMOJIS}
           now={now}
           sharing={sharing}
           userName={user.displayName ?? "Anonimo"}
           userEmail={user.email ?? "Nessuna email"}
           onLogout={() => signOut(auth)}
-          onMarkerChange={setMarker}
+          onEmojiChange={setEmoji}
           onSharingChange={() => setSharing((value) => !value)}
         />
       </div>
@@ -258,26 +275,26 @@ function LoginScreen({
 function CommandCenter({
   currentLocation,
   friends,
-  marker,
-  markers,
+  emoji,
+  emojis,
   now,
   sharing,
   userName,
   userEmail,
   onLogout,
-  onMarkerChange,
+  onEmojiChange,
   onSharingChange,
 }: {
   currentLocation?: FriendLocation;
   friends: [string, FriendLocation][];
-  marker: string;
-  markers: string[];
+  emoji: string;
+  emojis: string[];
   now: number;
   sharing: boolean;
   userName: string;
   userEmail: string;
   onLogout: () => void;
-  onMarkerChange: (marker: string) => void;
+  onEmojiChange: (emoji: string) => void;
   onSharingChange: () => void;
 }) {
   return (
@@ -300,7 +317,7 @@ function CommandCenter({
         </div>
         <div className="telemetry">
           <span>MARKER</span>
-          <strong>{marker}</strong>
+          <strong>{emoji}</strong>
         </div>
         <div className="telemetry">
           <span>LAST GPS</span>
@@ -309,15 +326,15 @@ function CommandCenter({
       </section>
 
       <section className="panel-block">
-        <p className="panel-label">[MARKER_SELECT]</p>
+        <p className="panel-label">[EMOJI_SELECT]</p>
         <div className="marker-grid">
-          {markers.map((item) => (
+          {emojis.map((item) => (
             <button
               key={item}
-              className={item === marker ? "selected" : ""}
+              className={item === emoji ? "selected" : ""}
               type="button"
-              aria-pressed={item === marker}
-              onClick={() => onMarkerChange(item)}
+              aria-pressed={item === emoji}
+              onClick={() => onEmojiChange(item)}
             >
               {item}
             </button>
@@ -334,8 +351,8 @@ function CommandCenter({
             <div className="friend-row" key={uid}>
               <div>
                 <span className="friend-beacon" />
-                <strong>{friend.name}</strong>
-                <small>{friend.emoji} LIVE SIGNAL</small>
+                <strong>{friend.emoji} {friend.name.split(" ")[0]}</strong>
+                <small>{formatDistance(currentLocation, friend)} AWAY</small>
               </div>
               <time>{formatAge(friend.updatedAt, now)}</time>
             </div>
@@ -351,14 +368,14 @@ function CommandCenter({
 }
 
 function MobileRadar({
+  currentLocation,
   friends,
-  now,
   open,
   sharing,
   onToggleOpen,
 }: {
+  currentLocation?: FriendLocation;
   friends: [string, FriendLocation][];
-  now: number;
   open: boolean;
   sharing: boolean;
   onToggleOpen: () => void;
@@ -378,8 +395,8 @@ function MobileRadar({
         ) : (
           friends.map(([uid, friend]) => (
             <div className="mobile-friend" key={uid}>
-              <div>{getInitials(friend.name)}</div>
-              <span>{formatAge(friend.updatedAt, now)}</span>
+              <div>{friend.emoji}</div>
+              <span>{friend.name.split(" ")[0]} · {formatDistance(currentLocation, friend)}</span>
             </div>
           ))
         )}
