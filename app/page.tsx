@@ -14,6 +14,7 @@ import {
 import { auth, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
+import { getNearestStage } from "@/components/Map";
 
 const Map = dynamic(() => import("@/components/Map"), {
   ssr: false,
@@ -131,6 +132,7 @@ export default function Home() {
   );
 
   const currentLocation = activeUser ? locations[activeUser.uid] : undefined;
+  const currentStage = sharing && currentLocation ? getNearestStage(currentLocation.lat, currentLocation.lng) : "";
 
   async function handleLogin() {
     setAuthError("");
@@ -243,6 +245,8 @@ export default function Home() {
               <strong>{friends.length} ONLINE</strong>
             </div>
           </div>
+
+          {currentStage && <div className="you-stage-badge">YOU: {currentStage}</div>}
 
           <button
             className="pulse-button"
@@ -411,6 +415,7 @@ function CommandCenter({
               <div>
                 <span className="friend-beacon" />
                 <strong>{friend.emoji} {friend.name.split(" ")[0]}</strong>
+                <small className="friend-stage">{getNearestStage(friend.lat, friend.lng)}</small>
                 <small>{formatDistance(currentLocation, friend)} AWAY</small>
               </div>
               <time>{formatAge(friend.updatedAt, now)}</time>
@@ -456,6 +461,7 @@ function MobileRadar({
             <div className="mobile-friend" key={uid}>
               <div>{friend.emoji}</div>
               <span>{friend.name.split(" ")[0]} · {formatDistance(currentLocation, friend)}</span>
+              <small>{getNearestStage(friend.lat, friend.lng)}</small>
             </div>
           ))
         )}

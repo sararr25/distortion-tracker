@@ -11,6 +11,34 @@ type Props = {
 
 type LeafletModule = typeof import("leaflet");
 
+const STAGES = [
+  { name: "RAVE", emoji: "🔊", lat: 55.6889, lng: 12.6108 },
+  { name: "FOREST", emoji: "🌲", lat: 55.6876, lng: 12.6115 },
+  { name: "HANGAREN", emoji: "🏭", lat: 55.6895, lng: 12.6092 },
+  { name: "OASIS", emoji: "🌊", lat: 55.6884, lng: 12.6101 },
+  { name: "SUNRISE", emoji: "🌅", lat: 55.6880, lng: 12.6122 },
+  { name: "SHADOW", emoji: "👤", lat: 55.6878, lng: 12.6135 },
+  { name: "PODIUM", emoji: "🎤", lat: 55.6871, lng: 12.6112 },
+  { name: "ENTRANCE", emoji: "🚪", lat: 55.6865, lng: 12.6095 },
+  { name: "FIRST AID", emoji: "🏥", lat: 55.6893, lng: 12.6088 },
+];
+
+function getNearestStage(lat: number, lng: number): string {
+  let nearest = STAGES[0];
+  let minDist = Infinity;
+
+  STAGES.forEach((stage) => {
+    const d = Math.sqrt((lat - stage.lat) ** 2 + (lng - stage.lng) ** 2);
+    if (d < minDist) {
+      minDist = d;
+      nearest = stage;
+    }
+  });
+
+  const meters = minDist * 111000;
+  return meters < 80 ? `${nearest.emoji} ${nearest.name}` : "📍 in giro";
+}
+
 function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -60,6 +88,29 @@ export default function Map({ locations, currentUid }: Props) {
         "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
         { attribution: "© CartoDB" }
       ).addTo(map);
+
+      STAGES.forEach((stage) => {
+        const icon = L.divIcon({
+          className: "",
+          html: `
+            <div style="
+              background: rgba(0,0,0,0.75);
+              border: 1px solid #CCFF00;
+              color: #CCFF00;
+              font-family: monospace;
+              font-size: 9px;
+              font-weight: 900;
+              padding: 3px 6px;
+              border-radius: 3px;
+              white-space: nowrap;
+              letter-spacing: 0.08em;
+            ">${stage.emoji} ${stage.name}</div>
+          `,
+          iconAnchor: [30, 10],
+        });
+
+        L.marker([stage.lat, stage.lng], { icon, interactive: false }).addTo(map);
+      });
 
       mapRef.current = { map, L };
       setReady(true);
@@ -144,3 +195,5 @@ export default function Map({ locations, currentUid }: Props) {
     />
   );
 }
+
+export { getNearestStage };

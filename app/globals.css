@@ -598,6 +598,24 @@ button {
   font-weight: 400;
 }
 
+.you-stage-badge {
+  position: absolute;
+  right: 1rem;
+  bottom: 14.4rem;
+  z-index: 5;
+  border: 1px solid #ccff00;
+  background: rgba(19, 19, 19, 0.72);
+  color: #ccff00;
+  padding: 0.55rem 0.7rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  pointer-events: none;
+  backdrop-filter: blur(18px);
+}
+
 .command-center {
   display: none;
   min-width: 0;
@@ -722,8 +740,12 @@ button {
   grid-column: 2;
 }
 
+.friend-stage {
+  color: #ccff00;
+}
+
 .friend-beacon {
-  grid-row: span 2;
+  grid-row: span 3;
   width: 0.55rem;
   height: 0.55rem;
   background: var(--secondary);
@@ -854,6 +876,14 @@ button {
   text-transform: uppercase;
 }
 
+.mobile-friend small {
+  color: #ccff00;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
 .mobile-empty {
   width: 100%;
   border: 1px solid var(--outline-variant);
@@ -933,6 +963,11 @@ button {
   .pulse-button {
     right: 1.5rem;
     bottom: 1.5rem;
+  }
+
+  .you-stage-badge {
+    right: 1.5rem;
+    bottom: 7rem;
   }
 
   .command-center {
