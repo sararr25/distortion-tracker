@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { signInWithRedirect, signOut } from "firebase/auth";
-import { onChildAdded, push, ref, serverTimestamp } from "firebase/database";
+import { get, off, onChildAdded, onValue, push, ref, remove, runTransaction, serverTimestamp, set } from "firebase/database";
 import { auth, db, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
@@ -14,8 +14,16 @@ const Map = dynamic(() => import("@/components/Map"), {
   loading: () => <div className="map-loading">INITIALIZING RADAR</div>,
 });
 
-const EMOJIS = ["🔥", "⚡", "🎯", "👾", "💀", "🌀", "🐍", "🦊"];
+const EMOJIS = [
+  "🔥", "⚡", "🎯", "👾", "💀", "🌀", "🐍", "🦊",
+  "👸", "🦥", "🧔‍♂️", "🪩", "🧚", "🧙", "🤖", "👽",
+  "🦄", "🌈", "🍒", "🧿", "🛸", "💎", "🫧", "🍄",
+];
 const FRESH_MS = 10 * 60 * 1000;
+
+function emojiKey(value: string) {
+  return encodeURIComponent(value);
+}
 
 function getInitials(name: string) {
   return name
@@ -58,6 +66,7 @@ export default function Home() {
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
   const [localLocation, setLocalLocation] = useState<FriendLocation | undefined>();
   const [emoji, setEmoji] = useState("🔥");
+  const [emojiLocks, setEmojiLocks] = useState<Record<string, string>>({});
   const [profileName, setProfileName] = useState("");
   const [query, setQuery] = useState("");
   const [authError, setAuthError] = useState("");
@@ -65,6 +74,9 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [pulseAlert, setPulseAlert] = useState<{ from: string; emoji: string } | null>(null);
+  const [pulseChooserOpen, setPulseChooserOpen] = useState(false);
+  const [pulseTargetUids, setPulseTargetUids] = useState<Set<string>>(() => new Set());
+  const [focusedLocation, setFocusedLocation] = useState<{ lat: number; lng: number; focusId: number } | null>(null);
 
   const handleUpdate = useCallback((data: Record<string, FriendLocation>) => {
     setLocations(data);
@@ -77,6 +89,53 @@ export default function Home() {
   const displayName = profileName.trim() || user?.displayName || "Anonimo";
 
   useLocation(Boolean(user), sharing, emoji, displayName, handleUpdate, handleSelfUpdate);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const locksRef = ref(db, "emojiLocks");
+    onValue(locksRef, (snapshot) => {
+      setEmojiLocks((snapshot.val() ?? {}) as Record<string, string>);
+    });
+
+    return () => {
+      off(locksRef);
+    };
+  }, [user]);
+
+  const isEmojiLocked = useCallback((item: string) => {
+    const owner = emojiLocks[emojiKey(item)];
+    return Boolean(user && owner && owner !== user.uid);
+  }, [emojiLocks, user]);
+
+  const handleEmojiChange = useCallback(async (nextEmoji: string) => {
+    if (!user || isEmojiLocked(nextEmoji)) return;
+
+    const previousEmoji = emoji;
+    const nextKey = emojiKey(nextEmoji);
+    const result = await runTransaction(ref(db, `emojiLocks/${nextKey}`), (currentOwner) => {
+      if (currentOwner === null || currentOwner === user.uid) return user.uid;
+      return;
+    });
+
+    if (!result.committed && result.snapshot.val() !== user.uid) return;
+
+    setEmoji(nextEmoji);
+    await set(ref(db, `profiles/${user.uid}`), {
+      name: displayName,
+      emoji: nextEmoji,
+      updatedAt: serverTimestamp(),
+    });
+
+    const previousKey = emojiKey(previousEmoji);
+    if (previousKey === nextKey) return;
+
+    const previousRef = ref(db, `emojiLocks/${previousKey}`);
+    const previousLock = await get(previousRef);
+    if (previousLock.val() === user.uid) {
+      await remove(previousRef);
+    }
+  }, [displayName, emoji, isEmojiLocked, user]);
 
   const handleSharingToggle = useCallback(() => {
     setSharing((value) => {
@@ -117,6 +176,41 @@ export default function Home() {
     if (!user) return;
     window.localStorage.setItem(`dt-profile-emoji-${user.uid}`, emoji);
   }, [emoji, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    let timeout: number | undefined;
+
+    const owner = emojiLocks[emojiKey(emoji)];
+    if (!owner || owner === user.uid) {
+      timeout = window.setTimeout(() => void handleEmojiChange(emoji), 0);
+      return () => {
+        if (timeout) window.clearTimeout(timeout);
+      };
+    }
+
+    const fallbackEmoji = EMOJIS.find((item) => {
+      const fallbackOwner = emojiLocks[emojiKey(item)];
+      return !fallbackOwner || fallbackOwner === user.uid;
+    });
+
+    if (fallbackEmoji) {
+      timeout = window.setTimeout(() => void handleEmojiChange(fallbackEmoji), 0);
+    }
+
+    return () => {
+      if (timeout) window.clearTimeout(timeout);
+    };
+  }, [emoji, emojiLocks, handleEmojiChange, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    void set(ref(db, `profiles/${user.uid}`), {
+      name: displayName,
+      emoji,
+      updatedAt: serverTimestamp(),
+    });
+  }, [displayName, emoji, user]);
 
   const playPulseSound = useCallback(() => {
     const AudioContextConstructor =
@@ -173,8 +267,9 @@ export default function Home() {
     const pulsesRef = ref(db, "pulses");
     const unsub = onChildAdded(pulsesRef, (snapshot) => {
       if (isFirstLoad.current) return;
-      const pulse = snapshot.val() as { from?: string; fromEmoji?: string; uid?: string } | null;
+      const pulse = snapshot.val() as { from?: string; fromEmoji?: string; uid?: string; recipients?: string[] } | null;
       if (!pulse || pulse.uid === auth.currentUser?.uid) return;
+      if (Array.isArray(pulse.recipients) && user && !pulse.recipients.includes(user.uid)) return;
       triggerPulse(pulse.from ?? "Someone", pulse.fromEmoji ?? "⚡");
     });
 
@@ -184,16 +279,6 @@ export default function Home() {
       isFirstLoad.current = true;
     };
   }, [triggerPulse, user]);
-
-  async function handleSendPulse() {
-    triggerPulse(displayName, emoji);
-    await push(ref(db, "pulses"), {
-      from: displayName,
-      fromEmoji: emoji,
-      uid: auth.currentUser?.uid,
-      at: serverTimestamp(),
-    });
-  }
 
   const effectiveLocations = useMemo(() => {
     if (!user || !localLocation) return locations;
@@ -221,6 +306,59 @@ export default function Home() {
 
   const currentLocation = user ? effectiveLocations[user.uid] : undefined;
   const currentStage = sharing && currentLocation ? getNearestStage(currentLocation.lat, currentLocation.lng) : "";
+
+  const handleOpenPulseChooser = useCallback(() => {
+    setPulseTargetUids(new Set(friends.map(([uid]) => uid)));
+    setPulseChooserOpen(true);
+  }, [friends]);
+
+  const handlePulseTargetToggle = useCallback((uid: string) => {
+    setPulseTargetUids((current) => {
+      const next = new Set(current);
+      if (next.has(uid)) {
+        next.delete(uid);
+      } else {
+        next.add(uid);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleClosePulseChooser = useCallback(() => {
+    setPulseChooserOpen(false);
+  }, []);
+
+  const sendPulse = useCallback(async (recipients?: string[]) => {
+    if (recipients && recipients.length === 0) return;
+
+    triggerPulse(displayName, emoji);
+    setPulseChooserOpen(false);
+    await push(ref(db, "pulses"), {
+      from: displayName,
+      fromEmoji: emoji,
+      uid: auth.currentUser?.uid,
+      recipients: recipients ?? null,
+      at: serverTimestamp(),
+    });
+  }, [displayName, emoji, triggerPulse]);
+
+  const handleSendPulseToAll = useCallback(() => {
+    void sendPulse();
+  }, [sendPulse]);
+
+  const handleSendPulseToSelected = useCallback(() => {
+    void sendPulse(Array.from(pulseTargetUids));
+  }, [pulseTargetUids, sendPulse]);
+
+  const handleFocusFriend = useCallback((friend: FriendLocation) => {
+    setFocusedLocation({
+      lat: friend.lat,
+      lng: friend.lng,
+      focusId: Date.now(),
+    });
+    setPanelOpen(false);
+    setMenuOpen(false);
+  }, []);
 
   async function handleLogin() {
     setAuthError("");
@@ -340,7 +478,7 @@ export default function Home() {
       <div className="workspace">
         <section className="map-stage" id="map" aria-label="Mappa live">
           <div className="map-frame">
-            <Map locations={effectiveLocations} currentUid={user.uid} />
+            <Map locations={effectiveLocations} currentUid={user.uid} focusedLocation={focusedLocation} />
             <div className="scanline-layer" />
             <div className="radar-sweep" />
           </div>
@@ -378,7 +516,7 @@ export default function Home() {
           <button
             className="pulse-button"
             type="button"
-            onClick={handleSendPulse}
+            onClick={handleOpenPulseChooser}
           >
             <span>SEND</span>
             <strong>PULSE</strong>
@@ -389,6 +527,7 @@ export default function Home() {
             currentLocation={currentLocation}
             open={panelOpen}
             sharing={sharing}
+            onFocusFriend={handleFocusFriend}
             onToggleOpen={() => setPanelOpen((value) => !value)}
           />
         </section>
@@ -404,8 +543,10 @@ export default function Home() {
           userEmail={user.email ?? "Nessuna email"}
           onLogout={handleLogout}
           onNameChange={setProfileName}
-          onEmojiChange={setEmoji}
-          onSendPulse={handleSendPulse}
+          onEmojiChange={handleEmojiChange}
+          onFocusFriend={handleFocusFriend}
+          onSendPulse={handleOpenPulseChooser}
+          isEmojiLocked={isEmojiLocked}
         />
       </div>
 
@@ -417,9 +558,20 @@ export default function Home() {
         profileName={profileName}
         userEmail={user.email ?? "Nessuna email"}
         onClose={() => setMenuOpen(false)}
-        onEmojiChange={setEmoji}
+        onEmojiChange={handleEmojiChange}
         onLogout={handleLogout}
         onNameChange={setProfileName}
+        isEmojiLocked={isEmojiLocked}
+      />
+
+      <PulseChooser
+        friends={friends}
+        open={pulseChooserOpen}
+        selectedUids={pulseTargetUids}
+        onClose={handleClosePulseChooser}
+        onSendAll={handleSendPulseToAll}
+        onSendSelected={handleSendPulseToSelected}
+        onToggleTarget={handlePulseTargetToggle}
       />
 
       <nav className="bottom-nav" aria-label="Navigazione mobile">
@@ -435,7 +587,7 @@ export default function Home() {
           <span>◎</span>
           <small>Radar</small>
         </button>
-        <button type="button" aria-label="Invia pulse" onClick={handleSendPulse}>
+        <button type="button" aria-label="Invia pulse" onClick={handleOpenPulseChooser}>
           <span>⌁</span>
           <small>Pulse</small>
         </button>
@@ -512,7 +664,9 @@ function CommandCenter({
   onLogout,
   onNameChange,
   onEmojiChange,
+  onFocusFriend,
   onSendPulse,
+  isEmojiLocked,
 }: {
   currentLocation?: FriendLocation;
   friends: [string, FriendLocation][];
@@ -524,8 +678,10 @@ function CommandCenter({
   userEmail: string;
   onLogout: () => void;
   onNameChange: (name: string) => void;
-  onEmojiChange: (emoji: string) => void;
+  onEmojiChange: (emoji: string) => void | Promise<void>;
+  onFocusFriend: (friend: FriendLocation) => void;
   onSendPulse: () => void;
+  isEmojiLocked: (emoji: string) => boolean;
 }) {
   return (
     <aside className="command-center" id="radar">
@@ -573,7 +729,9 @@ function CommandCenter({
               className={item === emoji ? "selected" : ""}
               type="button"
               aria-pressed={item === emoji}
-              onClick={() => onEmojiChange(item)}
+              disabled={isEmojiLocked(item)}
+              title={isEmojiLocked(item) ? "Gia scelta" : undefined}
+              onClick={() => void onEmojiChange(item)}
             >
               {item}
             </button>
@@ -587,7 +745,7 @@ function CommandCenter({
           <div className="empty-state">NO FRIEND SIGNALS</div>
         ) : (
           friends.map(([uid, friend]) => (
-            <div className="friend-row" key={uid}>
+            <button className="friend-row" key={uid} type="button" onClick={() => onFocusFriend(friend)}>
               <div>
                 <span className="friend-beacon" />
                 <strong>{friend.emoji} {friend.name.split(" ")[0]}</strong>
@@ -595,7 +753,7 @@ function CommandCenter({
                 <small>{formatDistance(currentLocation, friend)} AWAY</small>
               </div>
               <time>{formatAge(friend.updatedAt, now)}</time>
-            </div>
+            </button>
           ))
         )}
       </section>
@@ -604,6 +762,74 @@ function CommandCenter({
         LOGOUT
       </button>
     </aside>
+  );
+}
+
+function PulseChooser({
+  friends,
+  open,
+  selectedUids,
+  onClose,
+  onSendAll,
+  onSendSelected,
+  onToggleTarget,
+}: {
+  friends: [string, FriendLocation][];
+  open: boolean;
+  selectedUids: Set<string>;
+  onClose: () => void;
+  onSendAll: () => void;
+  onSendSelected: () => void;
+  onToggleTarget: (uid: string) => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="pulse-choice-backdrop" role="presentation">
+      <section className="pulse-choice" role="dialog" aria-modal="true" aria-labelledby="pulse-choice-title">
+        <div className="pulse-choice-header">
+          <div>
+            <span>[PULSE_TARGET]</span>
+            <h2 id="pulse-choice-title">SEND PULSE</h2>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Chiudi scelta pulse">
+            ×
+          </button>
+        </div>
+
+        <button className="pulse-choice-all" type="button" onClick={onSendAll}>
+          INVIA A TUTTI
+        </button>
+
+        <div className="pulse-choice-list" aria-label="Seleziona destinatari">
+          {friends.length === 0 ? (
+            <div className="empty-state">NO FRIEND SIGNALS</div>
+          ) : (
+            friends.map(([uid, friend]) => (
+              <label className="pulse-choice-row" key={uid}>
+                <input
+                  checked={selectedUids.has(uid)}
+                  onChange={() => onToggleTarget(uid)}
+                  type="checkbox"
+                />
+                <span>{friend.emoji}</span>
+                <strong>{friend.name.split(" ")[0]}</strong>
+                <small>{getNearestStage(friend.lat, friend.lng)}</small>
+              </label>
+            ))
+          )}
+        </div>
+
+        <button
+          className="pulse-choice-selected"
+          type="button"
+          disabled={selectedUids.size === 0}
+          onClick={onSendSelected}
+        >
+          INVIA AI SELEZIONATI
+        </button>
+      </section>
+    </div>
   );
 }
 
@@ -618,6 +844,7 @@ function MobileMenu({
   onEmojiChange,
   onLogout,
   onNameChange,
+  isEmojiLocked,
 }: {
   open: boolean;
   emoji: string;
@@ -626,9 +853,10 @@ function MobileMenu({
   profileName: string;
   userEmail: string;
   onClose: () => void;
-  onEmojiChange: (emoji: string) => void;
+  onEmojiChange: (emoji: string) => void | Promise<void>;
   onLogout: () => void;
   onNameChange: (name: string) => void;
+  isEmojiLocked: (emoji: string) => boolean;
 }) {
   return (
     <aside className={open ? "mobile-menu open" : "mobile-menu"} aria-hidden={!open}>
@@ -661,7 +889,9 @@ function MobileMenu({
               className={item === emoji ? "selected" : ""}
               type="button"
               aria-pressed={item === emoji}
-              onClick={() => onEmojiChange(item)}
+              disabled={isEmojiLocked(item)}
+              title={isEmojiLocked(item) ? "Gia scelta" : undefined}
+              onClick={() => void onEmojiChange(item)}
             >
               {item}
             </button>
@@ -686,12 +916,14 @@ function MobileRadar({
   friends,
   open,
   sharing,
+  onFocusFriend,
   onToggleOpen,
 }: {
   currentLocation?: FriendLocation;
   friends: [string, FriendLocation][];
   open: boolean;
   sharing: boolean;
+  onFocusFriend: (friend: FriendLocation) => void;
   onToggleOpen: () => void;
 }) {
   return (
@@ -714,11 +946,11 @@ function MobileRadar({
           <div className="mobile-empty">{sharing ? "WAITING FOR SIGNALS" : "GO LIVE TO BROADCAST"}</div>
         ) : (
           friends.map(([uid, friend]) => (
-            <div className="mobile-friend" key={uid}>
+            <button className="mobile-friend" key={uid} type="button" onClick={() => onFocusFriend(friend)}>
               <div>{friend.emoji}</div>
               <span>{friend.name.split(" ")[0]} · {formatDistance(currentLocation, friend)}</span>
               <small>{getNearestStage(friend.lat, friend.lng)}</small>
-            </div>
+            </button>
           ))
         )}
       </div>

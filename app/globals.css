@@ -744,6 +744,20 @@ button {
   color: var(--on-primary);
 }
 
+.marker-grid button:disabled {
+  border-color: rgba(125, 244, 255, 0.14);
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.28);
+  cursor: not-allowed;
+}
+
+.marker-grid button.selected:disabled {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+  cursor: default;
+}
+
 .friend-list {
   display: grid;
   gap: 0.3rem;
@@ -754,13 +768,19 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  width: 100%;
   border-left: 2px solid transparent;
+  background: transparent;
+  color: inherit;
   padding: 0.75rem 0.6rem;
+  text-align: left;
 }
 
-.friend-row:hover {
+.friend-row:hover,
+.friend-row:focus-visible {
   border-left-color: var(--secondary);
   background: var(--surface-highest);
+  outline: none;
 }
 
 .friend-row > div {
@@ -887,6 +907,15 @@ button {
   flex: 0 0 auto;
   justify-items: center;
   gap: 0.55rem;
+  min-width: 5.8rem;
+  background: transparent;
+  color: inherit;
+  text-align: center;
+}
+
+.mobile-friend:focus-visible {
+  outline: 1px solid var(--primary);
+  outline-offset: 3px;
 }
 
 .mobile-friend div {
@@ -923,6 +952,132 @@ button {
   border: 1px solid var(--outline-variant);
   padding: 1rem;
   text-align: center;
+}
+
+.pulse-choice-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.62);
+  padding: 1rem;
+  backdrop-filter: blur(10px);
+}
+
+.pulse-choice {
+  display: grid;
+  width: min(100%, 25rem);
+  max-height: min(78dvh, 34rem);
+  border: 1px solid var(--primary);
+  background: rgba(19, 19, 19, 0.96);
+  box-shadow: 0 0 34px rgba(195, 244, 0, 0.18);
+  overflow: auto;
+}
+
+.pulse-choice-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--outline-variant);
+  padding: 1rem;
+}
+
+.pulse-choice-header span {
+  color: var(--secondary);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+}
+
+.pulse-choice-header h2 {
+  margin: 0.2rem 0 0;
+  color: var(--primary);
+  font-family: var(--font-display), var(--font-display-fallback);
+  font-size: 2rem;
+  font-style: italic;
+  font-weight: 400;
+  line-height: 0.92;
+}
+
+.pulse-choice-header button {
+  display: grid;
+  width: 2.4rem;
+  height: 2.4rem;
+  place-items: center;
+  border: 1px solid var(--outline-variant);
+  background: transparent;
+  color: var(--primary);
+  font-size: 1.35rem;
+}
+
+.pulse-choice-all,
+.pulse-choice-selected {
+  margin: 1rem;
+  background: var(--primary);
+  color: var(--on-primary);
+  padding: 0.9rem;
+  font-family: var(--font-display), var(--font-display-fallback);
+  font-size: 1.35rem;
+  font-style: italic;
+  line-height: 1;
+}
+
+.pulse-choice-list {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0 1rem;
+}
+
+.pulse-choice-row {
+  display: grid;
+  grid-template-columns: auto 2rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-low);
+  padding: 0.65rem;
+}
+
+.pulse-choice-row input {
+  accent-color: var(--primary);
+}
+
+.pulse-choice-row span {
+  font-size: 1.35rem;
+}
+
+.pulse-choice-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #ffffff;
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pulse-choice-row small {
+  grid-column: 3;
+  color: var(--secondary);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pulse-choice-selected {
+  margin-top: 0.65rem;
+  border: 1px solid var(--secondary);
+  background: transparent;
+  color: var(--secondary);
+}
+
+.pulse-choice-selected:disabled {
+  border-color: var(--outline-variant);
+  color: var(--outline);
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .mobile-menu {

@@ -7,6 +7,11 @@ import type { FriendLocation } from "@/hooks/useLocation";
 type Props = {
   locations: Record<string, FriendLocation>;
   currentUid: string;
+  focusedLocation?: {
+    lat: number;
+    lng: number;
+    focusId: number;
+  } | null;
 };
 
 type LeafletModule = typeof import("leaflet");
@@ -96,7 +101,7 @@ function iconAssetUrl(fileName: string) {
   return `/icons-zone/${encodeURIComponent(fileName)}`;
 }
 
-export default function Map({ locations, currentUid }: Props) {
+export default function Map({ locations, currentUid, focusedLocation }: Props) {
   const mapRef = useRef<{ map: LeafletMap; L: LeafletModule } | null>(null);
   const markersRef = useRef<Record<string, Marker>>({});
   const containerRef = useRef<HTMLDivElement>(null);
@@ -156,8 +161,8 @@ export default function Map({ locations, currentUid }: Props) {
           interactive: false,
           icon: L.divIcon({
             className: "",
-            html: `<div style="display:flex;align-items:center;gap:5px;color:${zone.color};font-family:monospace;font-size:10px;font-weight:900;letter-spacing:0.1em;text-shadow:0 0 8px ${zone.color};white-space:nowrap;pointer-events:none;"><img src="${iconAssetUrl(zone.iconFile)}" alt="" style="width:18px;height:18px;object-fit:contain;filter:drop-shadow(0 0 4px ${zone.color});" />${zone.name}</div>`,
-            iconAnchor: [30, 8],
+            html: `<div style="display:flex;align-items:center;gap:7px;color:${zone.color};font-family:monospace;font-size:10px;font-weight:900;letter-spacing:0.1em;text-shadow:0 0 8px ${zone.color};white-space:nowrap;pointer-events:none;"><img src="${iconAssetUrl(zone.iconFile)}" alt="" style="width:38px;height:38px;object-fit:contain;filter:drop-shadow(0 0 6px ${zone.color});" />${zone.name}</div>`,
+            iconAnchor: [40, 18],
           }),
         }).addTo(map);
       });
@@ -171,8 +176,8 @@ export default function Map({ locations, currentUid }: Props) {
           interactive: false,
           icon: L.divIcon({
             className: "",
-            html: `<div style="display:flex;align-items:center;gap:4px;background:rgba(0,0,0,0.82);border:1px solid ${color};color:${color};font-family:monospace;font-size:9px;font-weight:900;letter-spacing:0.08em;padding:3px 6px;border-radius:3px;white-space:nowrap;box-shadow:0 0 8px rgba(0,0,0,0.75),0 0 6px ${color};pointer-events:none;" title="${name}"><img src="${iconUrl}" alt="" style="width:16px;height:16px;object-fit:contain;" />${name}</div>`,
-            iconAnchor: [30, 10],
+            html: `<div style="display:flex;align-items:center;gap:6px;background:rgba(0,0,0,0.84);border:1px solid ${color};color:${color};font-family:monospace;font-size:10px;font-weight:900;letter-spacing:0.08em;padding:4px 7px;border-radius:3px;white-space:nowrap;box-shadow:0 0 8px rgba(0,0,0,0.75),0 0 6px ${color};pointer-events:none;" title="${name}"><img src="${iconUrl}" alt="" style="width:34px;height:34px;object-fit:contain;" />${name}</div>`,
+            iconAnchor: [42, 20],
           }),
         }).addTo(map);
       });
@@ -259,6 +264,14 @@ export default function Map({ locations, currentUid }: Props) {
       delete markersRef.current[uid];
     });
   }, [locations, currentUid, ready]);
+
+  useEffect(() => {
+    if (!mapRef.current || !ready || !focusedLocation) return;
+    mapRef.current.map.flyTo([focusedLocation.lat, focusedLocation.lng], 18, {
+      animate: true,
+      duration: 0.75,
+    });
+  }, [focusedLocation, ready]);
 
   return (
     <div
