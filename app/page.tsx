@@ -2,7 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { signInWithPopup, signInWithRedirect, signOut } from "firebase/auth";
+import {
+  browserLocalPersistence,
+  getRedirectResult,
+  setPersistence,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+  type User,
+} from "firebase/auth";
 import { auth, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
@@ -58,6 +66,8 @@ function isAuthCode(error: unknown, code: string) {
 
 export default function Home() {
   const { user, loading } = useAuth();
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [checkingRedirect, setCheckingRedirect] = useState(true);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
   const [emoji, setEmoji] = useState("🔥");
@@ -70,11 +80,38 @@ export default function Home() {
     setLocations(data);
   }, []);
 
-  useLocation(Boolean(user), sharing, emoji, handleUpdate);
+  const activeUser = user ?? authUser;
+
+  useLocation(Boolean(activeUser), sharing, emoji, handleUpdate);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNow(Date.now()), 15000);
     return () => window.clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getRedirectResult(auth)
+      .then((result) => {
+        if (!cancelled && result?.user) {
+          setAuthUser(result.user);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAuthError(error instanceof Error ? error.message : "Login non riuscito.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCheckingRedirect(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const liveEntries = useMemo(
@@ -88,19 +125,22 @@ export default function Home() {
   const friends = useMemo(
     () =>
       liveEntries
-        .filter(([uid]) => uid !== user?.uid)
+        .filter(([uid]) => uid !== activeUser?.uid)
         .filter(([, loc]) => loc.name.toLowerCase().includes(query.toLowerCase())),
-    [liveEntries, query, user?.uid]
+    [activeUser?.uid, liveEntries, query]
   );
 
-  const currentLocation = user ? locations[user.uid] : undefined;
+  const currentLocation = activeUser ? locations[activeUser.uid] : undefined;
 
   async function handleLogin() {
     setAuthError("");
     try {
-      await signInWithPopup(auth, provider);
+      await setPersistence(auth, browserLocalPersistence);
+      const result = await signInWithPopup(auth, provider);
+      setAuthUser(result.user);
     } catch (error) {
       if (isAuthCode(error, "auth/popup-blocked")) {
+        await setPersistence(auth, browserLocalPersistence);
         await signInWithRedirect(auth, provider);
         return;
       }
@@ -109,7 +149,12 @@ export default function Home() {
     }
   }
 
-  if (loading) {
+  async function handleLogout() {
+    setAuthUser(null);
+    await signOut(auth);
+  }
+
+  if (loading || checkingRedirect) {
     return (
       <main className="loading-screen">
         <div className="strobe" />
@@ -118,7 +163,7 @@ export default function Home() {
     );
   }
 
-  if (!user) {
+  if (!activeUser) {
     return <LoginScreen authError={authError} onLogin={handleLogin} />;
   }
 
@@ -166,7 +211,7 @@ export default function Home() {
       <div className="workspace">
         <section className="map-stage" id="map" aria-label="Mappa live">
           <div className="map-frame">
-            <Map locations={locations} currentUid={user.uid} />
+            <Map locations={locations} currentUid={activeUser.uid} />
             <div className="scanline-layer" />
             <div className="radar-sweep" />
           </div>
@@ -225,9 +270,9 @@ export default function Home() {
           emojis={EMOJIS}
           now={now}
           sharing={sharing}
-          userName={user.displayName ?? "Anonimo"}
-          userEmail={user.email ?? "Nessuna email"}
-          onLogout={() => signOut(auth)}
+          userName={activeUser.displayName ?? "Anonimo"}
+          userEmail={activeUser.email ?? "Nessuna email"}
+          onLogout={handleLogout}
           onEmojiChange={setEmoji}
           onSharingChange={() => setSharing((value) => !value)}
         />
@@ -243,7 +288,7 @@ export default function Home() {
         <button type="button" aria-label="Condivisione" onClick={() => setSharing((value) => !value)}>
           {sharing ? "◉" : "○"}
         </button>
-        <button type="button" aria-label="Logout" onClick={() => signOut(auth)}>
+        <button type="button" aria-label="Logout" onClick={handleLogout}>
           ⇥
         </button>
       </nav>
