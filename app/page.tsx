@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { signInWithPopup, signOut } from "firebase/auth";
+import { signInWithRedirect, signOut } from "firebase/auth";
 import { auth, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
@@ -91,7 +91,7 @@ export default function Home() {
   async function handleLogin() {
     setAuthError("");
     try {
-      await signInWithPopup(auth, provider);
+      await signInWithRedirect(auth, provider);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Login non riuscito.");
     }
