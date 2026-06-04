@@ -52,14 +52,16 @@ export default function Map({ locations, currentUid }: Props) {
   const mapRef = useRef<{ map: LeafletMap; L: LeafletModule } | null>(null);
   const markersRef = useRef<Record<string, Marker>>({});
   const containerRef = useRef<HTMLDivElement>(null);
+  const initVersionRef = useRef(0);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined" || mapRef.current) return;
+    const initVersion = ++initVersionRef.current;
     let cancelled = false;
 
     import("leaflet").then((L) => {
-      if (cancelled || !containerRef.current) return;
+      if (cancelled || initVersionRef.current !== initVersion || !containerRef.current || mapRef.current) return;
       const container = containerRef.current as HTMLDivElement & { _leaflet_id?: number };
 
       if (container._leaflet_id) {
@@ -122,6 +124,13 @@ export default function Map({ locations, currentUid }: Props) {
         mapRef.current.map.remove();
         mapRef.current = null;
       }
+      if (containerRef.current) {
+        const container = containerRef.current as HTMLDivElement & { _leaflet_id?: number };
+        delete container._leaflet_id;
+        container.replaceChildren();
+      }
+      markersRef.current = {};
+      setReady(false);
     };
   }, []);
 

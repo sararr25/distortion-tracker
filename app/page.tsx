@@ -490,7 +490,13 @@ function MobileRadar({
 }) {
   return (
     <aside className={open ? "mobile-radar open" : "mobile-radar"}>
-      <button className="drawer-handle" type="button" onClick={onToggleOpen} aria-label="Apri friend radar">
+      <button
+        className="drawer-handle"
+        type="button"
+        onClick={onToggleOpen}
+        aria-expanded={open}
+        aria-label={open ? "Chiudi friend radar" : "Apri friend radar"}
+      >
         <span />
       </button>
       <div className="drawer-title">
