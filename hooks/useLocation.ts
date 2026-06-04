@@ -15,7 +15,8 @@ export function useLocation(
   sharing: boolean,
   emoji: string,
   name: string,
-  onUpdate: (locations: Record<string, FriendLocation>) => void
+  onUpdate: (locations: Record<string, FriendLocation>) => void,
+  onSelfUpdate?: (location: FriendLocation) => void
 ) {
   useEffect(() => {
     if (!enabled) {
@@ -40,12 +41,17 @@ export function useLocation(
       (pos) => {
         const uid = auth.currentUser?.uid;
         if (!uid) return;
-        set(ref(db, `locations/${uid}`), {
+        const location = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           name,
           emoji,
           updatedAt: Date.now(),
+        };
+
+        onSelfUpdate?.(location);
+        set(ref(db, `locations/${uid}`), {
+          ...location,
         });
       },
       (err) => console.error(err),
@@ -55,5 +61,5 @@ export function useLocation(
     return () => {
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [enabled, sharing, emoji, name]);
+  }, [enabled, sharing, emoji, name, onSelfUpdate]);
 }

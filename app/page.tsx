@@ -56,6 +56,7 @@ export default function Home() {
   const pulseTimeoutRef = useRef<number | null>(null);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
+  const [localLocation, setLocalLocation] = useState<FriendLocation | undefined>();
   const [emoji, setEmoji] = useState("🔥");
   const [profileName, setProfileName] = useState("");
   const [query, setQuery] = useState("");
@@ -69,9 +70,21 @@ export default function Home() {
     setLocations(data);
   }, []);
 
+  const handleSelfUpdate = useCallback((location: FriendLocation) => {
+    setLocalLocation(location);
+  }, []);
+
   const displayName = profileName.trim() || user?.displayName || "Anonimo";
 
-  useLocation(Boolean(user), sharing, emoji, displayName, handleUpdate);
+  useLocation(Boolean(user), sharing, emoji, displayName, handleUpdate, handleSelfUpdate);
+
+  const handleSharingToggle = useCallback(() => {
+    setSharing((value) => {
+      const next = !value;
+      if (!next) setLocalLocation(undefined);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNow(Date.now()), 15000);
@@ -182,12 +195,20 @@ export default function Home() {
     });
   }
 
+  const effectiveLocations = useMemo(() => {
+    if (!user || !localLocation) return locations;
+    return {
+      ...locations,
+      [user.uid]: localLocation,
+    };
+  }, [localLocation, locations, user]);
+
   const liveEntries = useMemo(
     () =>
-      Object.entries(locations)
+      Object.entries(effectiveLocations)
         .filter(([, loc]) => now - loc.updatedAt <= FRESH_MS)
         .sort(([, a], [, b]) => b.updatedAt - a.updatedAt),
-    [locations, now]
+    [effectiveLocations, now]
   );
 
   const friends = useMemo(
@@ -198,7 +219,7 @@ export default function Home() {
     [liveEntries, query, user?.uid]
   );
 
-  const currentLocation = user ? locations[user.uid] : undefined;
+  const currentLocation = user ? effectiveLocations[user.uid] : undefined;
   const currentStage = sharing && currentLocation ? getNearestStage(currentLocation.lat, currentLocation.lng) : "";
 
   async function handleLogin() {
@@ -213,6 +234,8 @@ export default function Home() {
   async function handleLogout() {
     setMenuOpen(false);
     setPanelOpen(false);
+    setSharing(false);
+    setLocalLocation(undefined);
     await signOut(auth);
   }
 
@@ -307,7 +330,7 @@ export default function Home() {
           className="share-pill"
           type="button"
           aria-pressed={sharing}
-          onClick={() => setSharing((value) => !value)}
+          onClick={handleSharingToggle}
         >
           <span className={sharing ? "status-dot on" : "status-dot"} />
           {sharing ? "LIVE" : "GO LIVE"}
@@ -317,7 +340,7 @@ export default function Home() {
       <div className="workspace">
         <section className="map-stage" id="map" aria-label="Mappa live">
           <div className="map-frame">
-            <Map locations={locations} currentUid={user.uid} />
+            <Map locations={effectiveLocations} currentUid={user.uid} />
             <div className="scanline-layer" />
             <div className="radar-sweep" />
           </div>
@@ -420,7 +443,7 @@ export default function Home() {
           className={sharing ? "active" : ""}
           type="button"
           aria-label={sharing ? "Interrompi condivisione" : "Avvia condivisione"}
-          onClick={() => setSharing((value) => !value)}
+          onClick={handleSharingToggle}
         >
           <span>{sharing ? "◉" : "○"}</span>
           <small>{sharing ? "Live" : "Go live"}</small>
