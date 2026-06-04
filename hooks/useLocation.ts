@@ -14,6 +14,7 @@ export function useLocation(
   enabled: boolean,
   sharing: boolean,
   emoji: string,
+  name: string,
   onUpdate: (locations: Record<string, FriendLocation>) => void
 ) {
   useEffect(() => {
@@ -42,7 +43,7 @@ export function useLocation(
         set(ref(db, `locations/${uid}`), {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
-          name: auth.currentUser?.displayName ?? "Anonimo",
+          name,
           emoji,
           updatedAt: Date.now(),
         });
@@ -54,5 +55,5 @@ export function useLocation(
     return () => {
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [enabled, sharing, emoji]);
+  }, [enabled, sharing, emoji, name]);
 }

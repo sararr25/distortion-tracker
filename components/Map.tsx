@@ -11,32 +11,68 @@ type Props = {
 
 type LeafletModule = typeof import("leaflet");
 
-const STAGES = [
-  { name: "RAVE", emoji: "🔊", lat: 55.6889, lng: 12.6108 },
-  { name: "FOREST", emoji: "🌲", lat: 55.6876, lng: 12.6115 },
-  { name: "HANGAREN", emoji: "🏭", lat: 55.6895, lng: 12.6092 },
-  { name: "OASIS", emoji: "🌊", lat: 55.6884, lng: 12.6101 },
-  { name: "SUNRISE", emoji: "🌅", lat: 55.6880, lng: 12.6122 },
-  { name: "SHADOW", emoji: "👤", lat: 55.6878, lng: 12.6135 },
-  { name: "PODIUM", emoji: "🎤", lat: 55.6871, lng: 12.6112 },
-  { name: "ENTRANCE", emoji: "🚪", lat: 55.6865, lng: 12.6095 },
-  { name: "FIRST AID", emoji: "🏥", lat: 55.6893, lng: 12.6088 },
+const FESTIVAL_ZONES = [
+  {
+    name: "RAVE", emoji: "🔊", color: "#FF6B00",
+    coords: [[55.690336, 12.615492], [55.690806, 12.615843], [55.690593, 12.61705], [55.690067, 12.616754], [55.690332, 12.615509]] as [number, number][],
+  },
+  {
+    name: "FOREST", emoji: "🌲", color: "#00FF88",
+    coords: [[55.689713, 12.616944], [55.689626, 12.617308], [55.689949, 12.617951], [55.690194, 12.617727], [55.690147, 12.617133], [55.689717, 12.616944]] as [number, number][],
+  },
+  {
+    name: "SUNRISE", emoji: "🌅", color: "#FF00FF",
+    coords: [[55.690482, 12.618658], [55.690628, 12.61893], [55.690628, 12.61942], [55.690359, 12.619462], [55.690352, 12.618839], [55.690482, 12.618658]] as [number, number][],
+  },
+  {
+    name: "SHADOW", emoji: "👤", color: "#00FFFF",
+    coords: [[55.690494, 12.620119], [55.690411, 12.620581], [55.690257, 12.620539], [55.6903, 12.620084], [55.690497, 12.620119]] as [number, number][],
+  },
+  {
+    name: "OASIS", emoji: "🌊", color: "#CCFF00",
+    coords: [[55.690812, 12.617791], [55.690723, 12.617696], [55.690636, 12.61797], [55.690761, 12.618172], [55.690868, 12.617989], [55.690812, 12.617791]] as [number, number][],
+  },
+  {
+    name: "FOOD COURT", emoji: "🍔", color: "#FFD700",
+    coords: [[55.69109, 12.617724], [55.691029, 12.618696], [55.691257, 12.618874], [55.691316, 12.618219], [55.691367, 12.61768], [55.69109, 12.617708]] as [number, number][],
+  },
+  {
+    name: "AWARENESS", emoji: "🏥", color: "#FF4444",
+    coords: [[55.690923, 12.616165], [55.691157, 12.616317], [55.691181, 12.616044], [55.690953, 12.61594], [55.690923, 12.616159]] as [number, number][],
+  },
+];
+
+const POIS = [
+  { name: "BAR", emoji: "🍺", lat: 55.690873, lng: 12.617855 },
+  { name: "BAR", emoji: "🍺", lat: 55.689738, lng: 12.617685 },
+  { name: "WC", emoji: "🚻", lat: 55.689934, lng: 12.616594 },
+  { name: "LOCKERS", emoji: "🔒", lat: 55.689957, lng: 12.615269 },
+  { name: "ENTRANCE", emoji: "🚪", lat: 55.689672, lng: 12.615095 },
+  { name: "WATER", emoji: "💧", lat: 55.690488, lng: 12.617131 },
+  { name: "WATER", emoji: "💧", lat: 55.691081, lng: 12.616684 },
 ];
 
 function getNearestStage(lat: number, lng: number): string {
-  let nearest = STAGES[0];
+  const stages = [
+    { name: "🔊 RAVE", lat: 55.690427, lng: 12.616130 },
+    { name: "🌲 FOREST", lat: 55.689891, lng: 12.617335 },
+    { name: "🌅 SUNRISE", lat: 55.690488, lng: 12.618994 },
+    { name: "👤 SHADOW", lat: 55.690392, lng: 12.620288 },
+    { name: "🌊 OASIS", lat: 55.690769, lng: 12.617902 },
+    { name: "🍔 FOOD COURT", lat: 55.691192, lng: 12.618150 },
+    { name: "🏥 AWARENESS", lat: 55.691258, lng: 12.616473 },
+  ];
+  let nearest = stages[0];
   let minDist = Infinity;
-
-  STAGES.forEach((stage) => {
-    const d = Math.sqrt((lat - stage.lat) ** 2 + (lng - stage.lng) ** 2);
+  stages.forEach((s) => {
+    const d = Math.sqrt((lat - s.lat) ** 2 + (lng - s.lng) ** 2);
     if (d < minDist) {
       minDist = d;
-      nearest = stage;
+      nearest = s;
     }
   });
-
   const meters = minDist * 111000;
-  return meters < 80 ? `${nearest.emoji} ${nearest.name}` : "📍 in giro";
+  return meters < 120 ? nearest.name : "📍 in giro";
 }
 
 function escapeHtml(value: string) {
@@ -57,12 +93,13 @@ export default function Map({ locations, currentUid }: Props) {
 
   useEffect(() => {
     if (typeof window === "undefined" || mapRef.current) return;
+    const containerElement = containerRef.current;
     const initVersion = ++initVersionRef.current;
     let cancelled = false;
 
     import("leaflet").then((L) => {
-      if (cancelled || initVersionRef.current !== initVersion || !containerRef.current || mapRef.current) return;
-      const container = containerRef.current as HTMLDivElement & { _leaflet_id?: number };
+      if (cancelled || initVersionRef.current !== initVersion || !containerElement || mapRef.current) return;
+      const container = containerElement as HTMLDivElement & { _leaflet_id?: number };
 
       if (container._leaflet_id) {
         delete container._leaflet_id;
@@ -78,11 +115,11 @@ export default function Map({ locations, currentUid }: Props) {
       });
 
       const map = L.map(container, {
-        center: [55.6881, 12.613],
+        center: [55.6904, 12.6175],
         zoom: 16,
         minZoom: 15,
         maxZoom: 19,
-        maxBounds: [[55.68, 12.6], [55.696, 12.628]],
+        maxBounds: [[55.688, 12.613], [55.693, 12.623]],
         zoomControl: false,
       });
 
@@ -91,27 +128,37 @@ export default function Map({ locations, currentUid }: Props) {
         { attribution: "© CartoDB" }
       ).addTo(map);
 
-      STAGES.forEach((stage) => {
-        const icon = L.divIcon({
-          className: "",
-          html: `
-            <div style="
-              background: rgba(0,0,0,0.75);
-              border: 1px solid #CCFF00;
-              color: #CCFF00;
-              font-family: monospace;
-              font-size: 9px;
-              font-weight: 900;
-              padding: 3px 6px;
-              border-radius: 3px;
-              white-space: nowrap;
-              letter-spacing: 0.08em;
-            ">${stage.emoji} ${stage.name}</div>
-          `,
-          iconAnchor: [30, 10],
-        });
+      FESTIVAL_ZONES.forEach((zone) => {
+        L.polygon(zone.coords, {
+          color: zone.color,
+          fillColor: zone.color,
+          fillOpacity: 0.13,
+          weight: 1.5,
+          opacity: 0.55,
+          interactive: false,
+        }).addTo(map);
 
-        L.marker([stage.lat, stage.lng], { icon, interactive: false }).addTo(map);
+        const latC = zone.coords.reduce((s, p) => s + p[0], 0) / zone.coords.length;
+        const lngC = zone.coords.reduce((s, p) => s + p[1], 0) / zone.coords.length;
+        L.marker([latC, lngC], {
+          interactive: false,
+          icon: L.divIcon({
+            className: "",
+            html: `<div style="color:${zone.color};font-family:monospace;font-size:10px;font-weight:900;letter-spacing:0.1em;text-shadow:0 0 8px ${zone.color};white-space:nowrap;pointer-events:none;">${zone.emoji} ${zone.name}</div>`,
+            iconAnchor: [30, 8],
+          }),
+        }).addTo(map);
+      });
+
+      POIS.forEach((poi) => {
+        L.marker([poi.lat, poi.lng], {
+          interactive: false,
+          icon: L.divIcon({
+            className: "",
+            html: `<div style="font-size:15px;filter:drop-shadow(0 0 3px rgba(255,255,255,0.4));pointer-events:none;" title="${poi.name}">${poi.emoji}</div>`,
+            iconAnchor: [8, 8],
+          }),
+        }).addTo(map);
       });
 
       mapRef.current = { map, L };
@@ -124,8 +171,8 @@ export default function Map({ locations, currentUid }: Props) {
         mapRef.current.map.remove();
         mapRef.current = null;
       }
-      if (containerRef.current) {
-        const container = containerRef.current as HTMLDivElement & { _leaflet_id?: number };
+      if (containerElement) {
+        const container = containerElement as HTMLDivElement & { _leaflet_id?: number };
         delete container._leaflet_id;
         container.replaceChildren();
       }

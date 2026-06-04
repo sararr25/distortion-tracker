@@ -52,12 +52,16 @@ function formatDistance(from: FriendLocation | undefined, to: FriendLocation) {
 export default function Home() {
   const { user, loading } = useAuth();
   const isFirstLoad = useRef(true);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const pulseTimeoutRef = useRef<number | null>(null);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
   const [emoji, setEmoji] = useState("🔥");
+  const [profileName, setProfileName] = useState("");
   const [query, setQuery] = useState("");
   const [authError, setAuthError] = useState("");
   const [panelOpen, setPanelOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [pulseAlert, setPulseAlert] = useState<{ from: string; emoji: string } | null>(null);
 
@@ -65,23 +69,52 @@ export default function Home() {
     setLocations(data);
   }, []);
 
-  useLocation(Boolean(user), sharing, emoji, handleUpdate);
+  const displayName = profileName.trim() || user?.displayName || "Anonimo";
+
+  useLocation(Boolean(user), sharing, emoji, displayName, handleUpdate);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNow(Date.now()), 15000);
     return () => window.clearInterval(intervalId);
   }, []);
 
-  const triggerPulse = useCallback((name: string, pulseEmoji: string) => {
-    if (navigator.vibrate) {
-      navigator.vibrate([200, 100, 200, 100, 400]);
-    }
+  useEffect(() => {
+    return () => {
+      if (pulseTimeoutRef.current) {
+        window.clearTimeout(pulseTimeoutRef.current);
+      }
+    };
+  }, []);
 
+  useEffect(() => {
+    if (!user) return;
+    const timeout = window.setTimeout(() => {
+      setProfileName(window.localStorage.getItem(`dt-profile-name-${user.uid}`) ?? user.displayName ?? "Anonimo");
+      setEmoji(window.localStorage.getItem(`dt-profile-emoji-${user.uid}`) ?? "🔥");
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !profileName.trim()) return;
+    window.localStorage.setItem(`dt-profile-name-${user.uid}`, profileName.trim());
+  }, [profileName, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    window.localStorage.setItem(`dt-profile-emoji-${user.uid}`, emoji);
+  }, [emoji, user]);
+
+  const playPulseSound = useCallback(() => {
     const AudioContextConstructor =
       window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
 
-    if (AudioContextConstructor) {
-      const ctx = new AudioContextConstructor();
+    if (!AudioContextConstructor) return;
+
+    const ctx = audioContextRef.current ?? new AudioContextConstructor();
+    audioContextRef.current = ctx;
+
+    const play = () => {
       [440, 550, 660].forEach((freq, i) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -94,11 +127,28 @@ export default function Home() {
         osc.start(ctx.currentTime + i * 0.15);
         osc.stop(ctx.currentTime + i * 0.15 + 0.3);
       });
+    };
+
+    if (ctx.state === "suspended") {
+      void ctx.resume().then(play).catch(play);
+    } else {
+      play();
+    }
+  }, []);
+
+  const triggerPulse = useCallback((name: string, pulseEmoji: string) => {
+    if (navigator.vibrate) {
+      navigator.vibrate([200, 100, 200, 100, 400]);
     }
 
+    playPulseSound();
+
     setPulseAlert({ from: name, emoji: pulseEmoji });
-    window.setTimeout(() => setPulseAlert(null), 2500);
-  }, []);
+    if (pulseTimeoutRef.current) {
+      window.clearTimeout(pulseTimeoutRef.current);
+    }
+    pulseTimeoutRef.current = window.setTimeout(() => setPulseAlert(null), 2500);
+  }, [playPulseSound]);
 
   useEffect(() => {
     if (!user) return;
@@ -123,8 +173,9 @@ export default function Home() {
   }, [triggerPulse, user]);
 
   async function handleSendPulse() {
+    triggerPulse(displayName, emoji);
     await push(ref(db, "pulses"), {
-      from: auth.currentUser?.displayName ?? "Someone",
+      from: displayName,
       fromEmoji: emoji,
       uid: auth.currentUser?.uid,
       at: serverTimestamp(),
@@ -160,6 +211,8 @@ export default function Home() {
   }
 
   async function handleLogout() {
+    setMenuOpen(false);
+    setPanelOpen(false);
     await signOut(auth);
   }
 
@@ -227,8 +280,11 @@ export default function Home() {
         <button
           className="icon-button mobile-only"
           type="button"
-          aria-label={panelOpen ? "Chiudi pannello" : "Apri pannello"}
-          onClick={() => setPanelOpen((value) => !value)}
+          aria-label={menuOpen ? "Chiudi menu" : "Apri menu"}
+          onClick={() => {
+            setMenuOpen((value) => !value);
+            setPanelOpen(false);
+          }}
         >
           ☰
         </button>
@@ -320,26 +376,66 @@ export default function Home() {
           emoji={emoji}
           emojis={EMOJIS}
           now={now}
-          userName={user.displayName ?? "Anonimo"}
+          profileName={profileName}
+          userName={displayName}
           userEmail={user.email ?? "Nessuna email"}
           onLogout={handleLogout}
+          onNameChange={setProfileName}
           onEmojiChange={setEmoji}
           onSendPulse={handleSendPulse}
         />
       </div>
 
+      <MobileMenu
+        open={menuOpen}
+        emoji={emoji}
+        emojis={EMOJIS}
+        displayName={displayName}
+        profileName={profileName}
+        userEmail={user.email ?? "Nessuna email"}
+        onClose={() => setMenuOpen(false)}
+        onEmojiChange={setEmoji}
+        onLogout={handleLogout}
+        onNameChange={setProfileName}
+      />
+
       <nav className="bottom-nav" aria-label="Navigazione mobile">
-        <a className="active" href="#map" aria-label="Mappa">
-          ⌖
-        </a>
-        <button type="button" aria-label="Friend radar" onClick={() => setPanelOpen(true)}>
-          ◎
+        <button
+          className={panelOpen ? "active" : ""}
+          type="button"
+          aria-label={panelOpen ? "Chiudi friend radar" : "Apri friend radar"}
+          onClick={() => {
+            setPanelOpen((value) => !value);
+            setMenuOpen(false);
+          }}
+        >
+          <span>◎</span>
+          <small>Radar</small>
         </button>
-        <button type="button" aria-label="Condivisione" onClick={() => setSharing((value) => !value)}>
-          {sharing ? "◉" : "○"}
+        <button type="button" aria-label="Invia pulse" onClick={handleSendPulse}>
+          <span>⌁</span>
+          <small>Pulse</small>
         </button>
-        <button type="button" aria-label="Logout" onClick={handleLogout}>
-          ⇥
+        <button
+          className={sharing ? "active" : ""}
+          type="button"
+          aria-label={sharing ? "Interrompi condivisione" : "Avvia condivisione"}
+          onClick={() => setSharing((value) => !value)}
+        >
+          <span>{sharing ? "◉" : "○"}</span>
+          <small>{sharing ? "Live" : "Go live"}</small>
+        </button>
+        <button
+          className={menuOpen ? "active" : ""}
+          type="button"
+          aria-label={menuOpen ? "Chiudi menu" : "Apri menu"}
+          onClick={() => {
+            setMenuOpen((value) => !value);
+            setPanelOpen(false);
+          }}
+        >
+          <span>☰</span>
+          <small>Menu</small>
         </button>
       </nav>
     </main>
@@ -387,9 +483,11 @@ function CommandCenter({
   emoji,
   emojis,
   now,
+  profileName,
   userName,
   userEmail,
   onLogout,
+  onNameChange,
   onEmojiChange,
   onSendPulse,
 }: {
@@ -398,9 +496,11 @@ function CommandCenter({
   emoji: string;
   emojis: string[];
   now: number;
+  profileName: string;
   userName: string;
   userEmail: string;
   onLogout: () => void;
+  onNameChange: (name: string) => void;
   onEmojiChange: (emoji: string) => void;
   onSendPulse: () => void;
 }) {
@@ -422,6 +522,15 @@ function CommandCenter({
             <span>{userEmail}</span>
           </div>
         </div>
+        <label className="profile-field">
+          <span>DISPLAY NAME</span>
+          <input
+            value={profileName}
+            onChange={(event) => onNameChange(event.target.value)}
+            maxLength={24}
+            type="text"
+          />
+        </label>
         <div className="telemetry">
           <span>MARKER</span>
           <strong>{emoji}</strong>
@@ -469,6 +578,80 @@ function CommandCenter({
       </section>
 
       <button className="logout-button" type="button" onClick={onLogout}>
+        LOGOUT
+      </button>
+    </aside>
+  );
+}
+
+function MobileMenu({
+  open,
+  emoji,
+  emojis,
+  displayName,
+  profileName,
+  userEmail,
+  onClose,
+  onEmojiChange,
+  onLogout,
+  onNameChange,
+}: {
+  open: boolean;
+  emoji: string;
+  emojis: string[];
+  displayName: string;
+  profileName: string;
+  userEmail: string;
+  onClose: () => void;
+  onEmojiChange: (emoji: string) => void;
+  onLogout: () => void;
+  onNameChange: (name: string) => void;
+}) {
+  return (
+    <aside className={open ? "mobile-menu open" : "mobile-menu"} aria-hidden={!open}>
+      <div className="mobile-menu-header">
+        <div>
+          <span>MENU</span>
+          <strong>{displayName}</strong>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Chiudi menu">
+          ×
+        </button>
+      </div>
+
+      <section className="mobile-menu-section">
+        <p className="panel-label">[PROFILE]</p>
+        <label className="profile-field">
+          <span>DISPLAY NAME</span>
+          <input
+            value={profileName}
+            onChange={(event) => onNameChange(event.target.value)}
+            maxLength={24}
+            type="text"
+          />
+        </label>
+        <span className="menu-email">{userEmail}</span>
+        <div className="marker-grid compact">
+          {emojis.map((item) => (
+            <button
+              key={item}
+              className={item === emoji ? "selected" : ""}
+              type="button"
+              aria-pressed={item === emoji}
+              onClick={() => onEmojiChange(item)}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="mobile-menu-section">
+        <p className="panel-label">[SETTINGS]</p>
+        <div className="empty-state">EMPTY</div>
+      </section>
+
+      <button className="logout-button mobile-menu-logout" type="button" onClick={onLogout}>
         LOGOUT
       </button>
     </aside>
