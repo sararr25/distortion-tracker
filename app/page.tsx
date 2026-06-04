@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { signInWithRedirect, signOut } from "firebase/auth";
-import { auth, provider } from "@/lib/firebase";
+import { onChildAdded, push, ref, serverTimestamp } from "firebase/database";
+import { auth, db, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
 import { getNearestStage } from "@/components/Map";
@@ -50,6 +51,7 @@ function formatDistance(from: FriendLocation | undefined, to: FriendLocation) {
 
 export default function Home() {
   const { user, loading } = useAuth();
+  const isFirstLoad = useRef(true);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
   const [emoji, setEmoji] = useState("🔥");
@@ -57,6 +59,7 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [panelOpen, setPanelOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [pulseAlert, setPulseAlert] = useState<{ from: string; emoji: string } | null>(null);
 
   const handleUpdate = useCallback((data: Record<string, FriendLocation>) => {
     setLocations(data);
@@ -68,6 +71,65 @@ export default function Home() {
     const intervalId = window.setInterval(() => setNow(Date.now()), 15000);
     return () => window.clearInterval(intervalId);
   }, []);
+
+  const triggerPulse = useCallback((name: string, pulseEmoji: string) => {
+    if (navigator.vibrate) {
+      navigator.vibrate([200, 100, 200, 100, 400]);
+    }
+
+    const AudioContextConstructor =
+      window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+    if (AudioContextConstructor) {
+      const ctx = new AudioContextConstructor();
+      [440, 550, 660].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = freq;
+        osc.type = "sine";
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.3);
+        osc.start(ctx.currentTime + i * 0.15);
+        osc.stop(ctx.currentTime + i * 0.15 + 0.3);
+      });
+    }
+
+    setPulseAlert({ from: name, emoji: pulseEmoji });
+    window.setTimeout(() => setPulseAlert(null), 2500);
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    isFirstLoad.current = true;
+    const timeout = window.setTimeout(() => {
+      isFirstLoad.current = false;
+    }, 2000);
+    const pulsesRef = ref(db, "pulses");
+    const unsub = onChildAdded(pulsesRef, (snapshot) => {
+      if (isFirstLoad.current) return;
+      const pulse = snapshot.val() as { from?: string; fromEmoji?: string; uid?: string } | null;
+      if (!pulse || pulse.uid === auth.currentUser?.uid) return;
+      triggerPulse(pulse.from ?? "Someone", pulse.fromEmoji ?? "⚡");
+    });
+
+    return () => {
+      unsub();
+      window.clearTimeout(timeout);
+      isFirstLoad.current = true;
+    };
+  }, [triggerPulse, user]);
+
+  async function handleSendPulse() {
+    await push(ref(db, "pulses"), {
+      from: auth.currentUser?.displayName ?? "Someone",
+      fromEmoji: emoji,
+      uid: auth.currentUser?.uid,
+      at: serverTimestamp(),
+    });
+  }
 
   const liveEntries = useMemo(
     () =>
@@ -116,6 +178,47 @@ export default function Home() {
 
   return (
     <main className="app-shell">
+      {pulseAlert && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: "rgba(204, 255, 0, 0.15)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "1rem",
+            animation: "pulseIn 0.3s ease-out",
+          }}
+        >
+          <div style={{ fontSize: "4rem" }}>{pulseAlert.emoji}</div>
+          <div
+            style={{
+              color: "#CCFF00",
+              fontFamily: "monospace",
+              fontWeight: 900,
+              fontSize: "1.4rem",
+              letterSpacing: "0.15em",
+            }}
+          >
+            {pulseAlert.from.split(" ")[0].toUpperCase()}
+          </div>
+          <div
+            style={{
+              color: "#fff",
+              fontFamily: "monospace",
+              fontSize: "0.85rem",
+              opacity: 0.7,
+            }}
+          >
+            SENT A PULSE
+          </div>
+        </div>
+      )}
+
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div className="noise-layer" />
@@ -196,10 +299,9 @@ export default function Home() {
           <button
             className="pulse-button"
             type="button"
-            aria-pressed={sharing}
-            onClick={() => setSharing((value) => !value)}
+            onClick={handleSendPulse}
           >
-            <span>{sharing ? "STOP" : "SEND"}</span>
+            <span>SEND</span>
             <strong>PULSE</strong>
           </button>
 
@@ -218,12 +320,11 @@ export default function Home() {
           emoji={emoji}
           emojis={EMOJIS}
           now={now}
-          sharing={sharing}
           userName={user.displayName ?? "Anonimo"}
           userEmail={user.email ?? "Nessuna email"}
           onLogout={handleLogout}
           onEmojiChange={setEmoji}
-          onSharingChange={() => setSharing((value) => !value)}
+          onSendPulse={handleSendPulse}
         />
       </div>
 
@@ -286,31 +387,29 @@ function CommandCenter({
   emoji,
   emojis,
   now,
-  sharing,
   userName,
   userEmail,
   onLogout,
   onEmojiChange,
-  onSharingChange,
+  onSendPulse,
 }: {
   currentLocation?: FriendLocation;
   friends: [string, FriendLocation][];
   emoji: string;
   emojis: string[];
   now: number;
-  sharing: boolean;
   userName: string;
   userEmail: string;
   onLogout: () => void;
   onEmojiChange: (emoji: string) => void;
-  onSharingChange: () => void;
+  onSendPulse: () => void;
 }) {
   return (
     <aside className="command-center" id="radar">
       <div className="command-action">
-        <button className="command-pulse" type="button" onClick={onSharingChange}>
+        <button className="command-pulse" type="button" onClick={onSendPulse}>
           <span>⌁</span>
-          {sharing ? "STOP PULSE" : "SEND PULSE"}
+          SEND PULSE
         </button>
       </div>
 
