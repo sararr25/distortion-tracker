@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { signInWithPopup, signOut } from "firebase/auth";
+import { signInWithPopup, signInWithRedirect, signOut } from "firebase/auth";
 import { auth, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
@@ -45,6 +45,15 @@ function getDistance(lat1: number, lng1: number, lat2: number, lng2: number): nu
 function formatDistance(from: FriendLocation | undefined, to: FriendLocation) {
   if (!from) return "--";
   return `${Math.round(getDistance(from.lat, from.lng, to.lat, to.lng))}M`;
+}
+
+function isAuthCode(error: unknown, code: string) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === code
+  );
 }
 
 export default function Home() {
@@ -91,6 +100,11 @@ export default function Home() {
     try {
       await signInWithPopup(auth, provider);
     } catch (error) {
+      if (isAuthCode(error, "auth/popup-blocked")) {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+
       setAuthError(error instanceof Error ? error.message : "Login non riuscito.");
     }
   }
