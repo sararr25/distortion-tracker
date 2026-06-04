@@ -1,0 +1,22 @@
+{
+  "name": "Distortion Tracker",
+  "short_name": "Distortion",
+  "description": "Real-time friend location tracker for techno music festivals.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#131313",
+  "theme_color": "#ccff00",
+  "icons": [
+    {
+      "src": "{{DATA:IMAGE:IMAGE_21}}",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "{{DATA:IMAGE:IMAGE_20}}",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}

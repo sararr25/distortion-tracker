@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>The Grid - Authentication</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Anton&amp;family=Space+Grotesk:wght@400;600&amp;family=Space+Mono:ital,wght@0,400;0,700;1,400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-tertiary": "#3c0090",
+                        "surface-dim": "#131313",
+                        "surface-variant": "#353534",
+                        "on-error-container": "#ffdad6",
+                        "on-secondary": "#00363a",
+                        "on-background": "#e5e2e1",
+                        "on-secondary-container": "#00686f",
+                        "on-secondary-fixed-variant": "#004f54",
+                        "error-container": "#93000a",
+                        "surface-container": "#201f1f",
+                        "error": "#ffb4ab",
+                        "secondary-fixed-dim": "#00dbe9",
+                        "surface-container-high": "#2a2a2a",
+                        "tertiary": "#ffffff",
+                        "inverse-surface": "#e5e2e1",
+                        "surface-bright": "#3a3939",
+                        "primary": "#ffffff",
+                        "tertiary-container": "#e9ddff",
+                        "on-tertiary-fixed": "#23005b",
+                        "on-primary-fixed": "#161e00",
+                        "secondary-fixed": "#7df4ff",
+                        "surface-container-lowest": "#0e0e0e",
+                        "tertiary-fixed": "#e9ddff",
+                        "on-primary-container": "#556d00",
+                        "on-primary-fixed-variant": "#3c4d00",
+                        "secondary-container": "#00eefc",
+                        "primary-fixed": "#c3f400",
+                        "surface-tint": "#abd600",
+                        "surface": "#131313",
+                        "surface-container-highest": "#353534",
+                        "on-tertiary-fixed-variant": "#5700c9",
+                        "on-surface-variant": "#c4c9ac",
+                        "primary-fixed-dim": "#abd600",
+                        "on-secondary-fixed": "#002022",
+                        "inverse-primary": "#506600",
+                        "on-tertiary-container": "#7829ff",
+                        "secondary": "#d3fbff",
+                        "on-primary": "#283500",
+                        "inverse-on-surface": "#313030",
+                        "outline": "#8e9379",
+                        "outline-variant": "#444933",
+                        "on-error": "#690005",
+                        "tertiary-fixed-dim": "#d1bcff",
+                        "on-surface": "#e5e2e1",
+                        "primary-container": "#c3f400",
+                        "background": "#131313",
+                        "surface-container-low": "#1c1b1b"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0px",
+                        "lg": "0px",
+                        "xl": "0px",
+                        "full": "0px"
+                    },
+                    spacing: {
+                        "margin-desktop": "64px",
+                        "gutter": "16px",
+                        "container-max": "1440px",
+                        "margin-mobile": "20px",
+                        "unit": "4px"
+                    },
+                    fontFamily: {
+                        "body-md": ["Space Grotesk", "sans-serif"],
+                        "label-sm": ["Space Mono", "monospace"],
+                        "headline-display": ["Anton", "sans-serif"],
+                        "headline-lg": ["Anton", "sans-serif"],
+                        "headline-lg-mobile": ["Anton", "sans-serif"]
+                    },
+                    fontSize: {
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "500" }],
+                        "headline-display": ["80px", { "lineHeight": "80px", "letterSpacing": "0.05em", "fontWeight": "400" }],
+                        "headline-lg": ["48px", { "lineHeight": "48px", "letterSpacing": "0.02em", "fontWeight": "400" }],
+                        "headline-lg-mobile": ["36px", { "lineHeight": "36px", "fontWeight": "400" }]
+                    },
+                    animation: {
+                        'glitch-flicker': 'glitch 0.2s linear infinite',
+                        'scanline': 'scanline 8s linear infinite',
+                        'pulse-glow': 'pulseGlow 3s ease-in-out infinite alternate',
+                    },
+                    keyframes: {
+                        glitch: {
+                            '0%, 100%': { transform: 'translate(0)' },
+                            '20%': { transform: 'translate(-2px, 1px)' },
+                            '40%': { transform: 'translate(-1px, -1px)' },
+                            '60%': { transform: 'translate(2px, 1px)' },
+                            '80%': { transform: 'translate(1px, -1px)' },
+                        },
+                        scanline: {
+                            '0%': { transform: 'translateY(-100%)' },
+                            '100%': { transform: 'translateY(100vh)' },
+                        },
+                        pulseGlow: {
+                            '0%': { opacity: '0.4', filter: 'blur(40px)' },
+                            '100%': { opacity: '0.8', filter: 'blur(60px)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        /* Grain/Noise texture overlay to prevent banding and add texture */
+        .bg-noise {
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E");
+        }
+        
+        /* Perspective Grid */
+        .perspective-grid {
+            background-image: 
+                linear-gradient(to right, rgba(125, 244, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(125, 244, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px;
+            transform: perspective(500px) rotateX(60deg);
+            transform-origin: bottom;
+            mask-image: linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%);
+            -webkit-mask-image: linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%);
+        }
+
+        /* Glitch Button Hover */
+        .btn-glitch:hover {
+            animation: glitch-flicker 0.1s infinite;
+            background-color: transparent !important;
+            color: theme('colors.primary-fixed') !important;
+            border-color: theme('colors.primary-fixed') !important;
+            box-shadow: 0 0 20px theme('colors.primary-fixed-dim');
+        }
+
+        .text-glow {
+            text-shadow: 0 0 20px rgba(255,255,255,0.3);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md min-h-screen overflow-hidden selection:bg-primary-fixed selection:text-on-primary-fixed relative">
+<!-- Ambient Background Lighting / Strobe effects -->
+<div class="absolute inset-0 pointer-events-none overflow-hidden flex items-center justify-center">
+<!-- Radial Acid Yellow Glow -->
+<div class="absolute w-[800px] h-[800px] bg-primary-fixed/10 rounded-full blur-[100px] animate-pulse-glow"></div>
+<!-- Tertiary Light Leak -->
+<div class="absolute top-0 right-1/4 w-[600px] h-[600px] bg-tertiary-fixed/5 rounded-full blur-[120px]"></div>
+</div>
+<!-- Perspective Floor Grid -->
+<div class="absolute bottom-0 left-0 right-0 h-1/2 perspective-grid pointer-events-none"></div>
+<!-- Noise Texture Overlay -->
+<div class="absolute inset-0 bg-noise pointer-events-none mix-blend-overlay"></div>
+<!-- Subtle Scanline -->
+<div class="absolute inset-0 pointer-events-none overflow-hidden">
+<div class="w-full h-2 bg-secondary-fixed/5 blur-sm animate-scanline"></div>
+</div>
+<!-- Main Content Container -->
+<main class="relative z-10 flex min-h-screen w-full flex-col items-center justify-center p-6 md:p-margin-desktop">
+<div class="flex flex-col items-center max-w-3xl w-full text-center relative">
+<!-- Context Label -->
+<div class="flex items-center gap-2 mb-6">
+<span class="h-[1px] w-8 bg-secondary-fixed hidden md:block"></span>
+<p class="font-label-sm text-secondary-fixed uppercase tracking-widest">System Initialize</p>
+<span class="h-[1px] w-8 bg-secondary-fixed hidden md:block"></span>
+</div>
+<!-- Main Headline -->
+<h1 class="font-headline-display text-primary uppercase italic tracking-[0.05em] mb-12 text-glow relative leading-none">
+                THE GRID
+                <!-- Glitch decorative offset -->
+<span aria-hidden="true" class="absolute top-[2px] left-[2px] text-primary-fixed opacity-30 -z-10 mix-blend-screen">THE GRID</span>
+<span aria-hidden="true" class="absolute -top-[2px] -left-[2px] text-secondary-fixed opacity-30 -z-10 mix-blend-screen">THE GRID</span>
+</h1>
+<!-- Action Area -->
+<div class="flex flex-col items-center gap-8 w-full max-w-sm">
+<button class="btn-glitch group relative flex w-full cursor-pointer items-center justify-center overflow-hidden border-2 border-primary-fixed bg-primary-fixed px-8 py-5 transition-all duration-75">
+<span class="font-headline-lg-mobile text-on-primary-fixed uppercase italic tracking-wide transition-colors group-hover:text-primary-fixed">ENTER TO PROCEED</span>
+<!-- Button inner glow line -->
+<div class="absolute bottom-0 left-0 h-[2px] w-full bg-primary opacity-50"></div>
+</button>
+<!-- Technical Subtext -->
+<div class="flex flex-col items-center gap-2 mt-4">
+<div class="flex items-center gap-2 text-on-surface">
+<span class="material-symbols-outlined text-xl text-primary-fixed" style="font-variation-settings: 'FILL' 1;">cell_tower</span>
+<p class="font-label-sm uppercase tracking-widest">Authenticate via Neural Link</p>
+</div>
+<div class="flex items-center gap-4 mt-6">
+<div class="h-[1px] w-12 bg-surface-variant"></div>
+<p class="font-label-sm text-outline uppercase tracking-widest opacity-60">v 2.0.4</p>
+<div class="h-[1px] w-12 bg-surface-variant"></div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>
