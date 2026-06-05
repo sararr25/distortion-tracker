@@ -151,28 +151,43 @@ export default function Map({ locations, currentUid, mapStyle, focusedLocation }
     const scale = getZoomScale(zoom);
 
     labelMarkersRef.current.forEach(({ marker, zone }) => {
-      const fontSize = Math.max(7, Math.round(11 * scale));
-      const emojiSize = Math.max(9, Math.round(14 * scale));
+      const fontSize = Math.max(7, Math.round(9 * scale));
+      const iconSize = Math.max(11, Math.round(15 * scale));
+      const shadowSize = Math.max(2, Math.round(5 * scale));
+      const labelWidth = Math.max(54, Math.round(82 * scale));
+      const labelHeight = Math.max(26, Math.round(34 * scale));
+      const escapedName = escapeHtml(zone.name);
       marker.setIcon(L.divIcon({
         className: "",
         html: `<div style="
+  display: grid;
+  width: ${labelWidth}px;
+  justify-items: center;
+  gap: ${Math.max(1, Math.round(2 * scale))}px;
   color: ${zone.color};
   font-family: monospace;
   font-size: ${fontSize}px;
   font-weight: 900;
   letter-spacing: 0.12em;
-  text-shadow: 0 0 ${Math.round(10 * scale)}px ${zone.color}, 0 0 ${Math.round(20 * scale)}px ${zone.color}88;
+  text-shadow: 0 0 ${shadowSize}px ${zone.color}, 0 0 ${Math.round(10 * scale)}px ${zone.color}88;
   white-space: nowrap;
   pointer-events: none;
   text-align: center;
-  line-height: 1.4;
-"><span style="font-size:${emojiSize}px">${zone.emoji}</span><br>${zone.name}</div>`,
-        iconAnchor: [Math.round(30 * scale), Math.round(8 * scale)],
+  line-height: 1.15;
+"><img src="${iconAssetUrl(zone.iconFile)}" alt="" style="
+  width: ${iconSize}px;
+  height: ${iconSize}px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 ${shadowSize}px ${zone.color});
+  pointer-events: none;
+" /><span>${escapedName}</span></div>`,
+        iconSize: [labelWidth, labelHeight],
+        iconAnchor: [Math.round(labelWidth / 2), Math.round(labelHeight / 2)],
       }));
     });
 
     poiMarkersRef.current.forEach(({ marker, poi }) => {
-      const iconSize = Math.max(14, Math.round(28 * scale));
+      const iconSize = Math.max(12, Math.round(18 * scale));
       const shadowSize = Math.max(2, Math.round(4 * scale));
       const html = poi.asset
         ? `<img src="${iconAssetUrl(poi.asset)}" alt="" style="
@@ -191,6 +206,7 @@ export default function Map({ locations, currentUid, mapStyle, focusedLocation }
       marker.setIcon(L.divIcon({
         className: "",
         html,
+        iconSize: [iconSize, iconSize],
         iconAnchor: [Math.round(iconSize / 2), Math.round(iconSize / 2)],
       }));
     });

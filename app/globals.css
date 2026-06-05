@@ -390,6 +390,40 @@ button {
   filter: saturate(1.1) contrast(1.08);
 }
 
+.map-style-switcher {
+  position: absolute;
+  top: 4.45rem;
+  left: 1rem;
+  z-index: 1000;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid #333;
+  border-radius: 6px;
+}
+
+.map-style-switcher button {
+  min-width: 2.35rem;
+  padding: 0.42rem 0.62rem;
+  border: 0;
+  border-right: 1px solid #333;
+  background: #0a0a0a;
+  color: #666;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1;
+}
+
+.map-style-switcher button:last-child {
+  border-right: 0;
+}
+
+.map-style-switcher button.active {
+  background: var(--primary);
+  color: #000;
+}
+
 .map-loading {
   display: grid;
   width: 100%;
@@ -738,6 +772,20 @@ button {
   border-color: var(--primary);
   outline: none;
   box-shadow: 0 0 14px rgba(195, 244, 0, 0.18);
+}
+
+.profile-save-button {
+  width: 100%;
+  margin-top: 1rem;
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+  padding: 0.85rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
 .marker-grid {
@@ -1165,11 +1213,87 @@ button {
   line-height: 1;
 }
 
+.mobile-menu-header .mobile-menu-back {
+  color: var(--secondary);
+}
+
+.mobile-menu-actions {
+  display: grid;
+  gap: 0.7rem;
+  padding-top: 0.95rem;
+}
+
+.mobile-menu-actions button {
+  display: grid;
+  grid-template-columns: 2.4rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.8rem;
+  min-height: 4.35rem;
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-low);
+  color: var(--on-surface);
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.mobile-menu-actions button:focus-visible {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.mobile-menu-actions button > span {
+  display: grid;
+  grid-row: span 2;
+  width: 2.4rem;
+  height: 2.4rem;
+  place-items: center;
+  border: 1px solid var(--secondary);
+  color: var(--secondary);
+  font-size: 1.25rem;
+}
+
+.mobile-menu-actions strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #ffffff;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-menu-actions small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--outline);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mobile-menu-actions .danger {
+  border-color: rgba(255, 180, 171, 0.58);
+}
+
+.mobile-menu-actions .danger > span,
+.mobile-menu-actions .danger strong {
+  border-color: var(--error);
+  color: var(--error);
+}
+
 .mobile-menu-section {
   display: grid;
   gap: 0.85rem;
   border-bottom: 1px solid var(--outline-variant);
   padding: 0.95rem 0;
+}
+
+.menu-profile-preview {
+  margin-bottom: 0;
 }
 
 .mobile-menu-section .panel-label {
@@ -1284,6 +1408,17 @@ button {
 
   .zone-card {
     display: none;
+  }
+
+  .map-style-switcher {
+    top: 3.35rem;
+    left: 0.65rem;
+  }
+
+  .map-style-switcher button {
+    min-width: 2.1rem;
+    padding: 0.36rem 0.5rem;
+    font-size: 0.62rem;
   }
 
   .pulse-button {
@@ -1419,7 +1554,12 @@ button {
   }
 
   .zone-card {
-    top: 1.5rem;
+    top: 7.15rem;
+    left: 1.5rem;
+  }
+
+  .map-style-switcher {
+    top: 4.45rem;
     left: 1.5rem;
   }
 

@@ -67,8 +67,8 @@ function formatAge(updatedAt: number, now: number) {
   return `${Math.floor(seconds / 60)}m`;
 }
 
-function getLastSeen(updatedAt: number): string {
-  const diffMs = Date.now() - updatedAt;
+function getLastSeen(updatedAt: number, now: number): string {
+  const diffMs = now - updatedAt;
   const diffSec = Math.floor(diffMs / 1000);
   const diffMin = Math.floor(diffSec / 60);
   if (diffSec < 15) return "adesso";
@@ -608,6 +608,19 @@ export default function Home() {
     await signOut(auth);
   }
 
+  const handleSaveProfile = useCallback(async () => {
+    if (!user) return;
+
+    const savedName = displayName;
+    window.localStorage.setItem(`dt-profile-name-${user.uid}`, savedName);
+    window.localStorage.setItem(`dt-profile-emoji-${user.uid}`, emoji);
+    await update(ref(db, `profiles/${user.uid}`), {
+      name: savedName,
+      emoji,
+      updatedAt: serverTimestamp(),
+    });
+  }, [displayName, emoji, user]);
+
   if (loading) {
     return (
       <main className="loading-screen">
@@ -728,32 +741,15 @@ export default function Home() {
               mapStyle={mapStyle}
               focusedLocation={focusedLocation}
             />
-            <div style={{
-              position: "absolute",
-              top: "0.75rem",
-              left: "0.75rem",
-              zIndex: 1000,
-              display: "flex",
-              borderRadius: "6px",
-              overflow: "hidden",
-              border: "1px solid #333",
-            }}>
+            <div className="map-style-switcher" aria-label="Map style">
               {(["dark", "light", "satellite"] as const).map((style) => (
                 <button
                   key={style}
+                  className={mapStyle === style ? "active" : ""}
                   onClick={() => setMapStyle(style)}
-                  style={{
-                    padding: "0.4rem 0.6rem",
-                    fontFamily: "monospace",
-                    fontSize: "0.65rem",
-                    fontWeight: 900,
-                    letterSpacing: "0.05em",
-                    cursor: "pointer",
-                    border: "none",
-                    borderRight: style !== "satellite" ? "1px solid #333" : "none",
-                    background: mapStyle === style ? "#CCFF00" : "#0a0a0a",
-                    color: mapStyle === style ? "#000" : "#666",
-                  }}
+                  type="button"
+                  aria-label={`Use ${style} map style`}
+                  aria-pressed={mapStyle === style}
                 >
                   {style === "dark" ? "🌑" : style === "light" ? "🌕" : "🛰️"}
                 </button>
@@ -807,6 +803,7 @@ export default function Home() {
             currentLocation={currentLocation}
             open={panelOpen}
             tick={tick}
+            now={now}
             onFocusFriend={handleFocusFriend}
             onToggleOpen={() => setPanelOpen((value) => !value)}
           />
@@ -826,6 +823,7 @@ export default function Home() {
           onGpsIntervalChange={handleGpsIntervalChange}
           onNameChange={setProfileName}
           onEmojiChange={handleEmojiChange}
+          onSaveProfile={handleSaveProfile}
           onFocusFriend={handleFocusFriend}
           onSendPulse={handleOpenPulseChooser}
           isEmojiLocked={isEmojiLocked}
@@ -845,6 +843,7 @@ export default function Home() {
         onGpsIntervalChange={handleGpsIntervalChange}
         onLogout={handleLogout}
         onNameChange={setProfileName}
+        onSaveProfile={handleSaveProfile}
         isEmojiLocked={isEmojiLocked}
       />
 
@@ -998,6 +997,7 @@ function CommandCenter({
   onGpsIntervalChange,
   onNameChange,
   onEmojiChange,
+  onSaveProfile,
   onFocusFriend,
   onSendPulse,
   isEmojiLocked,
@@ -1015,6 +1015,7 @@ function CommandCenter({
   onGpsIntervalChange: (interval: 3000 | 30000) => void;
   onNameChange: (name: string) => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
+  onSaveProfile: () => void | Promise<void>;
   onFocusFriend: (friend: FriendLocation) => void;
   onSendPulse: () => void;
   isEmojiLocked: (emoji: string) => boolean;
@@ -1054,6 +1055,9 @@ function CommandCenter({
           <span>LAST GPS</span>
           <strong>{currentLocation ? `${formatAge(currentLocation.updatedAt, now)} AGO` : "WAITING"}</strong>
         </div>
+        <button className="profile-save-button" type="button" onClick={() => void onSaveProfile()}>
+          SAVE PROFILE
+        </button>
       </section>
 
       <section className="panel-block">
@@ -1197,6 +1201,7 @@ function MobileMenu({
   onGpsIntervalChange,
   onLogout,
   onNameChange,
+  onSaveProfile,
   isEmojiLocked,
 }: {
   open: boolean;
@@ -1211,58 +1216,124 @@ function MobileMenu({
   onGpsIntervalChange: (interval: 3000 | 30000) => void;
   onLogout: () => void;
   onNameChange: (name: string) => void;
+  onSaveProfile: () => void | Promise<void>;
   isEmojiLocked: (emoji: string) => boolean;
 }) {
+  const [view, setView] = useState<"menu" | "profile" | "settings">("menu");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+
+  useEffect(() => {
+    if (!open) return;
+
+    const timeout = window.setTimeout(() => {
+      setView("menu");
+      setSaveState("idle");
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [open]);
+
+  const handleBack = () => {
+    setView("menu");
+    setSaveState("idle");
+  };
+
+  const handleSave = async () => {
+    setSaveState("saving");
+    await onSaveProfile();
+    setSaveState("saved");
+    window.setTimeout(() => setSaveState("idle"), 1600);
+  };
+
   return (
     <aside className={open ? "mobile-menu open" : "mobile-menu"} aria-hidden={!open}>
       <div className="mobile-menu-header">
+        {view !== "menu" && (
+          <button className="mobile-menu-back" type="button" onClick={handleBack} aria-label="Back to menu">
+            ←
+          </button>
+        )}
         <div>
-          <span>MENU</span>
-          <strong>{displayName}</strong>
+          <span>{view === "menu" ? "MENU" : view === "profile" ? "PROFILE" : "SETTINGS"}</span>
+          <strong>{view === "menu" ? displayName : view === "profile" ? "MY MAP ICON" : "APP CONTROLS"}</strong>
         </div>
         <button type="button" onClick={onClose} aria-label="Chiudi menu">
           ×
         </button>
       </div>
 
-      <section className="mobile-menu-section">
-        <p className="panel-label">[PROFILE]</p>
-        <label className="profile-field">
-          <span>DISPLAY NAME</span>
-          <input
-            value={profileName}
-            onChange={(event) => onNameChange(event.target.value)}
-            maxLength={24}
-            type="text"
-          />
-        </label>
-        <span className="menu-email">{userEmail}</span>
-        <GpsModeControl gpsInterval={gpsInterval} onGpsIntervalChange={onGpsIntervalChange} />
-        <div className="marker-grid compact">
-          {emojis.map((item) => (
-            <button
-              key={item}
-              className={item === emoji ? "selected" : ""}
-              type="button"
-              aria-pressed={item === emoji}
-              disabled={isEmojiLocked(item)}
-              title={isEmojiLocked(item) ? "Gia scelta" : undefined}
-              onClick={() => void onEmojiChange(item)}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
-      </section>
+      {view === "menu" && (
+        <section className="mobile-menu-actions" aria-label="Menu actions">
+          <button type="button" onClick={() => setView("profile")}>
+            <span>▣</span>
+            <strong>PROFILE</strong>
+            <small>Name and map emoji</small>
+          </button>
+          <button type="button" onClick={() => setView("settings")}>
+            <span>⚙</span>
+            <strong>SETTINGS</strong>
+            <small>GPS mode</small>
+          </button>
+          <button className="danger" type="button" onClick={onLogout}>
+            <span>⏻</span>
+            <strong>LOGOUT</strong>
+            <small>{userEmail}</small>
+          </button>
+        </section>
+      )}
 
-      <section className="mobile-menu-section">
-        <p className="panel-label">[SETTINGS]</p>
-        <div className="empty-state">EMPTY</div>
-      </section>
+      {view === "profile" && (
+        <section className="mobile-menu-section">
+          <p className="panel-label">[PROFILE]</p>
+          <div className="profile-row menu-profile-preview">
+            <div className="avatar">{emoji}</div>
+            <div>
+              <strong>{displayName}</strong>
+              <span>{userEmail}</span>
+            </div>
+          </div>
+          <label className="profile-field">
+            <span>DISPLAY NAME</span>
+            <input
+              value={profileName}
+              onChange={(event) => {
+                onNameChange(event.target.value);
+                setSaveState("idle");
+              }}
+              maxLength={24}
+              type="text"
+            />
+          </label>
+          <p className="panel-label">[MAP_ICON]</p>
+          <div className="marker-grid compact">
+            {emojis.map((item) => (
+              <button
+                key={item}
+                className={item === emoji ? "selected" : ""}
+                type="button"
+                aria-pressed={item === emoji}
+                disabled={isEmojiLocked(item)}
+                title={isEmojiLocked(item) ? "Gia scelta" : undefined}
+                onClick={() => {
+                  setSaveState("idle");
+                  void onEmojiChange(item);
+                }}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+          <button className="profile-save-button" type="button" onClick={() => void handleSave()}>
+            {saveState === "saving" ? "SAVING..." : saveState === "saved" ? "SAVED" : "SAVE PROFILE"}
+          </button>
+        </section>
+      )}
 
-      <button className="logout-button mobile-menu-logout" type="button" onClick={onLogout}>
-        LOGOUT
-      </button>
+      {view === "settings" && (
+        <section className="mobile-menu-section">
+          <GpsModeControl gpsInterval={gpsInterval} onGpsIntervalChange={onGpsIntervalChange} />
+        </section>
+      )}
     </aside>
   );
 }
@@ -1272,6 +1343,7 @@ function MobileRadar({
   friends,
   open,
   tick,
+  now,
   onFocusFriend,
   onToggleOpen,
 }: {
@@ -1279,6 +1351,7 @@ function MobileRadar({
   friends: [string, FriendSignal][];
   open: boolean;
   tick: number;
+  now: number;
   onFocusFriend: (friend: FriendLocation) => void;
   onToggleOpen: () => void;
 }) {
@@ -1304,7 +1377,7 @@ function MobileRadar({
         ) : (
           friends.map(([uid, friend]) => {
             const updatedAt = friend.location?.updatedAt ?? friend.updatedAt;
-            const diffMin = Math.floor((Date.now() - updatedAt) / 60000);
+            const diffMin = Math.floor((now - updatedAt) / 60000);
 
             return (
               <button
@@ -1326,7 +1399,7 @@ function MobileRadar({
                     color: diffMin < 2 ? "#CCFF00" : diffMin < 10 ? "#FF6B00" : "#666",
                   }}
                 >
-                  {getLastSeen(updatedAt)}
+                  {getLastSeen(updatedAt, now)}
                 </small>
                 <small>{friend.location ? getNearestStage(friend.location.lat, friend.location.lng) : "GPS MUTED"}</small>
               </button>
