@@ -12,13 +12,10 @@ export type FriendLocation = {
 };
 
 export function useLocation(
-  enabled: boolean,
-  sharing: boolean,
+  active: boolean,
   emoji: string,
   intervalMs: number,
-  name: string,
-  onUpdate: (locations: Record<string, FriendLocation>) => void,
-  onSelfUpdate?: (location: FriendLocation) => void
+  onUpdate: (locations: Record<string, FriendLocation>) => void
 ) {
   useEffect(() => {
     const locRef = ref(db, "locations");
@@ -30,64 +27,52 @@ export function useLocation(
     return () => {
       off(locRef);
     };
-  }, []);
+  }, [onUpdate]);
 
   useEffect(() => {
-    if (!enabled || !sharing || !("geolocation" in navigator)) return;
+    if (!active || !("geolocation" in navigator)) return;
 
-    let latestPosition: GeolocationPosition | null = null;
-    let lastPublishedAt = 0;
-    const publishLocation = async (pos: GeolocationPosition) => {
-      const uid = auth.currentUser?.uid;
-      if (!uid) return;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
 
-      lastPublishedAt = Date.now();
-      let battery: number | null = null;
-      if ("getBattery" in navigator) {
-        try {
-          const b = await (navigator as Navigator & { getBattery?: () => Promise<{ level: number }> }).getBattery?.();
-          battery = typeof b?.level === "number" ? Math.round(b.level * 100) : null;
-        } catch {}
-      }
+    const writePosition = () => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const uid = auth.currentUser?.uid;
+          if (!uid) return;
 
-      const location = {
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
-        name,
-        emoji,
-        updatedAt: lastPublishedAt,
-        battery,
-      };
+          const writeBaseLocation = (battery?: number | null) => {
+            void set(ref(db, `locations/${uid}`), {
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              name: auth.currentUser?.displayName ?? "Anonymous",
+              emoji,
+              updatedAt: Date.now(),
+              ...(battery === undefined ? {} : { battery }),
+            });
+          };
 
-      onSelfUpdate?.(location);
-      void set(ref(db, `locations/${uid}`), {
-        ...location,
-      });
+          if ("getBattery" in navigator) {
+            (navigator as Navigator & { getBattery?: () => Promise<{ level: number }> }).getBattery?.()
+              .then((batteryManager) => {
+                writeBaseLocation(Math.round(batteryManager.level * 100));
+              })
+              .catch(() => {
+                writeBaseLocation();
+              });
+          } else {
+            writeBaseLocation();
+          }
+        },
+        (err) => console.warn("GPS error:", err),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
     };
 
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        latestPosition = pos;
-        if (lastPublishedAt === 0 || Date.now() - lastPublishedAt >= intervalMs) {
-          void publishLocation(pos);
-        }
-      },
-      (err) => console.error(err),
-      {
-        enableHighAccuracy: true,
-        maximumAge: intervalMs,
-        timeout: intervalMs + 5000,
-      }
-    );
-    const intervalId = window.setInterval(() => {
-      if (latestPosition && Date.now() - lastPublishedAt >= intervalMs) {
-        void publishLocation(latestPosition);
-      }
-    }, intervalMs);
+    writePosition();
+    intervalId = setInterval(writePosition, intervalMs);
 
     return () => {
-      navigator.geolocation.clearWatch(watchId);
-      window.clearInterval(intervalId);
+      if (intervalId) clearInterval(intervalId);
     };
-  }, [enabled, sharing, emoji, intervalMs, name, onSelfUpdate]);
+  }, [active, emoji, intervalMs]);
 }

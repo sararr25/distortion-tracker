@@ -122,7 +122,7 @@ function getNearestStage(lat: number, lng: number): string {
     }
   });
   const meters = minDist * 111000;
-  return meters < 120 ? nearest.name : "📍 in giro";
+  return meters < 120 ? nearest.name : "📍 around";
 }
 
 function escapeHtml(value: string) {

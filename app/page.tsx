@@ -80,6 +80,8 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 };
 
+type GpsInterval = 3000 | 60000 | 300000;
+
 function emojiKey(value: string) {
   return encodeURIComponent(value);
 }
@@ -103,9 +105,9 @@ function getLastSeen(updatedAt: number, now: number): string {
   const diffMs = now - updatedAt;
   const diffSec = Math.floor(diffMs / 1000);
   const diffMin = Math.floor(diffSec / 60);
-  if (diffSec < 15) return "adesso";
-  if (diffSec < 60) return `${diffSec}s fa`;
-  if (diffMin < 60) return `${diffMin}min fa`;
+  if (diffSec < 15) return "now";
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffMin < 60) return `${diffMin}min ago`;
   return "offline";
 }
 
@@ -122,7 +124,7 @@ function getDistance(lat1: number, lng1: number, lat2: number, lng2: number): nu
 }
 
 function getSmartDistance(dist: number): string {
-  if (dist < 50) return "👀 QUI VICINO";
+  if (dist < 50) return "👀 NEARBY";
   if (dist < 1000) return `${Math.round(dist)}m away`;
   return `${(dist / 1000).toFixed(1)}km away`;
 }
@@ -155,6 +157,7 @@ export default function Home() {
   const pulseTimeoutRef = useRef<number | null>(null);
   const huntTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const huntNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const titleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sharingToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sharingToastReadyRef = useRef(false);
   const activeFriendTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -162,9 +165,8 @@ export default function Home() {
   const flyToRef = useRef<((lat: number, lng: number) => void) | null>(null);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
-  const [localLocation, setLocalLocation] = useState<FriendLocation | undefined>();
   const [emoji, setEmoji] = useState("🔥");
-  const [gpsInterval, setGpsInterval] = useState<3000 | 30000>(30000);
+  const [gpsInterval, setGpsInterval] = useState<GpsInterval>(60000);
   const [mapStyle, setMapStyle] = useState<"dark" | "light" | "satellite">("dark");
   const [profiles, setProfiles] = useState<Record<string, FriendProfile>>({});
   const [profilesLoadedUid, setProfilesLoadedUid] = useState<string | null>(null);
@@ -198,10 +200,6 @@ export default function Home() {
     setLocations(data);
   }, []);
 
-  const handleSelfUpdate = useCallback((location: FriendLocation) => {
-    setLocalLocation(location);
-  }, []);
-
   const clearAutoHuntTimeout = useCallback(() => {
     if (huntTimeoutRef.current) {
       clearTimeout(huntTimeoutRef.current);
@@ -209,7 +207,7 @@ export default function Home() {
     }
   }, []);
 
-  const handleGpsIntervalChange = useCallback((interval: 3000 | 30000) => {
+  const handleGpsIntervalChange = useCallback((interval: GpsInterval) => {
     setGpsInterval(interval);
     if (interval === 3000) clearAutoHuntTimeout();
   }, [clearAutoHuntTimeout]);
@@ -218,9 +216,9 @@ export default function Home() {
     flyToRef.current = flyTo;
   }, []);
 
-  const displayName = profileName.trim() || user?.displayName || "Anonimo";
+  const displayName = profileName.trim() || user?.displayName || "Anonymous";
 
-  useLocation(Boolean(user), sharing, emoji, gpsInterval, displayName, handleUpdate, handleSelfUpdate);
+  useLocation(Boolean(user && sharing), emoji, gpsInterval, handleUpdate);
 
   useEffect(() => {
     if (!user) return;
@@ -242,7 +240,7 @@ export default function Home() {
 
     const timeout = window.setTimeout(() => {
       const profile = profiles[user.uid];
-      setProfileName(profile?.name ?? window.localStorage.getItem(`dt-profile-name-${user.uid}`) ?? user.displayName ?? "Anonimo");
+      setProfileName(profile?.name ?? window.localStorage.getItem(`dt-profile-name-${user.uid}`) ?? user.displayName ?? "Anonymous");
       setEmoji(profile?.emoji ?? window.localStorage.getItem(`dt-profile-emoji-${user.uid}`) ?? "🔥");
       setProfileHydratedUid(user.uid);
     }, 0);
@@ -349,9 +347,7 @@ export default function Home() {
 
   const handleSharingToggle = useCallback(() => {
     setSharing((value) => {
-      const next = !value;
-      if (!next) setLocalLocation(undefined);
-      return next;
+      return !value;
     });
   }, []);
 
@@ -419,6 +415,12 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      void Notification.requestPermission();
+    }
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (pulseTimeoutRef.current) {
         window.clearTimeout(pulseTimeoutRef.current);
@@ -428,6 +430,9 @@ export default function Home() {
       }
       if (huntNoticeTimeoutRef.current) {
         clearTimeout(huntNoticeTimeoutRef.current);
+      }
+      if (titleTimeoutRef.current) {
+        clearTimeout(titleTimeoutRef.current);
       }
       if (sharingToastTimeoutRef.current) {
         clearTimeout(sharingToastTimeoutRef.current);
@@ -577,7 +582,7 @@ export default function Home() {
 
     if (huntTimeoutRef.current) clearTimeout(huntTimeoutRef.current);
     huntTimeoutRef.current = setTimeout(() => {
-      setGpsInterval(30000);
+      setGpsInterval(60000);
       huntTimeoutRef.current = null;
     }, 2 * 60 * 1000);
 
@@ -597,6 +602,22 @@ export default function Home() {
     void requestWakeLock();
 
     playPulseSound();
+
+    document.title = `⚡ PULSE FROM ${name.toUpperCase()}`;
+    if (titleTimeoutRef.current) clearTimeout(titleTimeoutRef.current);
+    titleTimeoutRef.current = setTimeout(() => {
+      document.title = "Distortion Tracker";
+      titleTimeoutRef.current = null;
+    }, 10000);
+
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(`⚡ ${name} sent a pulse!`, {
+        body: "Open the app to see their location",
+        icon: "/icon-192.png",
+        tag: "pulse",
+        renotify: true,
+      } as NotificationOptions & { renotify: boolean });
+    }
 
     setPulseAlert({ from: name, emoji: pulseEmoji });
     if (pulseTimeoutRef.current) {
@@ -630,13 +651,7 @@ export default function Home() {
     };
   }, [triggerPulse, user]);
 
-  const effectiveLocations = useMemo(() => {
-    if (!user || !localLocation) return locations;
-    return {
-      ...locations,
-      [user.uid]: localLocation,
-    };
-  }, [localLocation, locations, user]);
+  const effectiveLocations = locations;
 
   const liveEntries = useMemo(
     () =>
@@ -660,7 +675,7 @@ export default function Home() {
 
         if (!online) return null;
 
-        const name = profile?.name?.trim() || freshLocation?.name || "Anonimo";
+        const name = profile?.name?.trim() || freshLocation?.name || "Anonymous";
         const emoji = profile?.emoji || freshLocation?.emoji || "🔥";
 
         return [
@@ -824,7 +839,7 @@ export default function Home() {
     try {
       await signInWithRedirect(auth, provider);
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : "Login non riuscito.");
+      setAuthError(error instanceof Error ? error.message : "Login failed.");
     }
   }
 
@@ -832,7 +847,6 @@ export default function Home() {
     setMenuOpen(false);
     setPanelOpen(false);
     setSharing(false);
-    setLocalLocation(undefined);
     if (user) {
       await update(ref(db, `profiles/${user.uid}`), {
         online: false,
@@ -949,7 +963,7 @@ export default function Home() {
         <button
           className="icon-button mobile-only"
           type="button"
-          aria-label={menuOpen ? "Chiudi menu" : "Apri menu"}
+          aria-label={menuOpen ? "Close menu" : "Open menu"}
           onClick={() => {
             setMenuOpen((value) => !value);
             setPanelOpen(false);
@@ -968,7 +982,7 @@ export default function Home() {
           <span>DISTORTION</span>
           <strong>TRACKER</strong>
         </div>
-        <nav className="desktop-nav" aria-label="Sezioni">
+        <nav className="desktop-nav" aria-label="Sections">
           <a className="nav-item active" href="#map">
             <span>⌖</span> Live Map
           </a>
@@ -1005,7 +1019,7 @@ export default function Home() {
       )}
 
       <div className="workspace">
-        <section className="map-stage" id="map" aria-label="Mappa live">
+        <section className="map-stage" id="map" aria-label="Live map">
           <div className="map-frame">
             <Map
               locations={effectiveLocations}
@@ -1104,7 +1118,7 @@ export default function Home() {
           now={now}
           profileName={profileName}
           userName={displayName}
-          userEmail={user.email ?? "Nessuna email"}
+          userEmail={user.email ?? "No email"}
           onLogout={handleLogout}
           onGpsIntervalChange={handleGpsIntervalChange}
           onNameChange={setProfileName}
@@ -1123,7 +1137,7 @@ export default function Home() {
         emojis={EMOJIS}
         displayName={displayName}
         profileName={profileName}
-        userEmail={user.email ?? "Nessuna email"}
+        userEmail={user.email ?? "No email"}
         onClose={() => setMenuOpen(false)}
         onEmojiChange={handleEmojiChange}
         onGpsIntervalChange={handleGpsIntervalChange}
@@ -1143,11 +1157,11 @@ export default function Home() {
         onToggleTarget={handlePulseTargetToggle}
       />
 
-      <nav className="bottom-nav" aria-label="Navigazione mobile">
+      <nav className="bottom-nav" aria-label="Mobile navigation">
         <button
           className={panelOpen ? "active" : ""}
           type="button"
-          aria-label={panelOpen ? "Chiudi friend radar" : "Apri friend radar"}
+          aria-label={panelOpen ? "Close friend radar" : "Open friend radar"}
           onClick={() => {
             setPanelOpen((value) => !value);
             setMenuOpen(false);
@@ -1156,7 +1170,7 @@ export default function Home() {
           <span>◎</span>
           <small>Radar</small>
         </button>
-        <button type="button" aria-label="Invia pulse" onClick={handleOpenPulseChooser}>
+        <button type="button" aria-label="Send pulse" onClick={handleOpenPulseChooser}>
           <span>⌁</span>
           <small>Pulse</small>
         </button>
@@ -1172,7 +1186,7 @@ export default function Home() {
         <button
           className={menuOpen ? "active" : ""}
           type="button"
-          aria-label={menuOpen ? "Chiudi menu" : "Apri menu"}
+          aria-label={menuOpen ? "Close menu" : "Open menu"}
           onClick={() => {
             setMenuOpen((value) => !value);
             setPanelOpen(false);
@@ -1197,7 +1211,7 @@ function LoginScreen({
     <main className="login-screen">
       <div className="login-grid" />
       <div className="noise-layer" />
-      <section className="login-content" aria-label="Accesso Distortion Tracker">
+      <section className="login-content" aria-label="Distortion Tracker access">
         <div className="system-label">
           <span />
           <p>SYSTEM INITIALIZE</p>
@@ -1339,45 +1353,43 @@ function GpsModeControl({
   gpsInterval,
   onGpsIntervalChange,
 }: {
-  gpsInterval: 3000 | 30000;
-  onGpsIntervalChange: (interval: 3000 | 30000) => void;
+  gpsInterval: GpsInterval;
+  onGpsIntervalChange: (interval: GpsInterval) => void;
 }) {
+  const modes: Array<{
+    interval: GpsInterval;
+    color: string;
+    label: string;
+    sublabel: string;
+  }> = [
+    { interval: 3000, color: "#FF6B00", label: "🔍 HUNT", sublabel: "3s · find friends" },
+    { interval: 60000, color: "#CCFF00", label: "🔋 CHILL", sublabel: "1min · balanced" },
+    { interval: 300000, color: "#00FFFF", label: "💤 SAVE", sublabel: "5min · battery" },
+  ];
+
   return (
     <div>
       <p style={{ color: "#666", fontFamily: "monospace", fontSize: "0.75rem", marginBottom: "0.75rem", letterSpacing: "0.1em" }}>GPS MODE</p>
       <div style={{ display: "flex", gap: "0.5rem" }}>
-        <button
-          type="button"
-          aria-pressed={gpsInterval === 30000}
-          onClick={() => onGpsIntervalChange(30000)}
-          style={{
-            flex: 1, padding: "0.85rem", fontFamily: "monospace", fontWeight: 900,
-            fontSize: "0.85rem", letterSpacing: "0.1em", cursor: "pointer",
-            borderRadius: "6px", border: "none",
-            background: gpsInterval === 30000 ? "#1a1a1a" : "transparent",
-            color: gpsInterval === 30000 ? "#CCFF00" : "#444",
-            outline: gpsInterval === 30000 ? "1px solid #CCFF00" : "1px solid #333",
-          }}
-        >
-          🔋 CHILL<br />
-          <span style={{ fontSize: "0.7rem", fontWeight: 400, opacity: 0.7 }}>30s · save battery</span>
-        </button>
-        <button
-          type="button"
-          aria-pressed={gpsInterval === 3000}
-          onClick={() => onGpsIntervalChange(3000)}
-          style={{
-            flex: 1, padding: "0.85rem", fontFamily: "monospace", fontWeight: 900,
-            fontSize: "0.85rem", letterSpacing: "0.1em", cursor: "pointer",
-            borderRadius: "6px", border: "none",
-            background: gpsInterval === 3000 ? "#1a1a1a" : "transparent",
-            color: gpsInterval === 3000 ? "#FF6B00" : "#444",
-            outline: gpsInterval === 3000 ? "1px solid #FF6B00" : "1px solid #333",
-          }}
-        >
-          🔍 HUNT<br />
-          <span style={{ fontSize: "0.7rem", fontWeight: 400, opacity: 0.7 }}>3s · find friends</span>
-        </button>
+        {modes.map((mode) => (
+          <button
+            key={mode.interval}
+            type="button"
+            aria-pressed={gpsInterval === mode.interval}
+            onClick={() => onGpsIntervalChange(mode.interval)}
+            style={{
+              flex: 1, minHeight: "48px", padding: "0.85rem 0.45rem", fontFamily: "monospace", fontWeight: 900,
+              fontSize: "0.78rem", letterSpacing: "0.08em", cursor: "pointer",
+              borderRadius: "6px", border: "none",
+              background: gpsInterval === mode.interval ? "#1a1a1a" : "transparent",
+              color: gpsInterval === mode.interval ? mode.color : "#444",
+              outline: gpsInterval === mode.interval ? `1px solid ${mode.color}` : "1px solid #333",
+            }}
+          >
+            {mode.label}<br />
+            <span style={{ fontSize: "0.62rem", fontWeight: 400, opacity: 0.7 }}>{mode.sublabel}</span>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -1405,14 +1417,14 @@ function CommandCenter({
   currentLocation?: FriendLocation;
   friends: [string, FriendSignal][];
   emoji: string;
-  gpsInterval: 3000 | 30000;
+  gpsInterval: GpsInterval;
   emojis: string[];
   now: number;
   profileName: string;
   userName: string;
   userEmail: string;
   onLogout: () => void;
-  onGpsIntervalChange: (interval: 3000 | 30000) => void;
+  onGpsIntervalChange: (interval: GpsInterval) => void;
   onNameChange: (name: string) => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
   onSaveProfile: () => void | Promise<void>;
@@ -1474,7 +1486,7 @@ function CommandCenter({
               type="button"
               aria-pressed={item === emoji}
               disabled={isEmojiLocked(item)}
-              title={isEmojiLocked(item) ? "Gia scelta" : undefined}
+              title={isEmojiLocked(item) ? "Already chosen" : undefined}
               onClick={() => void onEmojiChange(item)}
             >
               {item}
@@ -1500,7 +1512,7 @@ function CommandCenter({
                 key={uid}
                 type="button"
                 aria-disabled={!friend.location}
-                title={friend.location ? undefined : "GPS non condiviso"}
+                title={friend.location ? undefined : "GPS not shared"}
                 onClick={() => {
                   if (friend.location) onFocusFriend(friend.location);
                 }}
@@ -1562,13 +1574,13 @@ function PulseChooser({
             <span>[PULSE_TARGET]</span>
             <h2 id="pulse-choice-title">SEND PULSE</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="Chiudi scelta pulse">
+          <button type="button" onClick={onClose} aria-label="Close pulse choice">
             ×
           </button>
         </div>
 
         <button className="pulse-choice-all" type="button" onClick={onSendAll}>
-          INVIA A TUTTI
+          SEND TO ALL
         </button>
 
         <div className="pulse-choice-list" aria-label="Seleziona destinatari">
@@ -1596,7 +1608,7 @@ function PulseChooser({
           disabled={selectedUids.size === 0}
           onClick={onSendSelected}
         >
-          INVIA AI SELEZIONATI
+          SEND SELECTED
         </button>
       </section>
     </div>
@@ -1621,14 +1633,14 @@ function MobileMenu({
 }: {
   open: boolean;
   emoji: string;
-  gpsInterval: 3000 | 30000;
+  gpsInterval: GpsInterval;
   emojis: string[];
   displayName: string;
   profileName: string;
   userEmail: string;
   onClose: () => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
-  onGpsIntervalChange: (interval: 3000 | 30000) => void;
+  onGpsIntervalChange: (interval: GpsInterval) => void;
   onLogout: () => void;
   onNameChange: (name: string) => void;
   onSaveProfile: () => void | Promise<void>;
@@ -1672,7 +1684,7 @@ function MobileMenu({
           <span>{view === "menu" ? "MENU" : view === "profile" ? "PROFILE" : "SETTINGS"}</span>
           <strong>{view === "menu" ? displayName : view === "profile" ? "MY MAP ICON" : "APP CONTROLS"}</strong>
         </div>
-        <button type="button" onClick={onClose} aria-label="Chiudi menu">
+        <button type="button" onClick={onClose} aria-label="Close menu">
           ×
         </button>
       </div>
@@ -1728,7 +1740,7 @@ function MobileMenu({
                 type="button"
                 aria-pressed={item === emoji}
                 disabled={isEmojiLocked(item)}
-                title={isEmojiLocked(item) ? "Gia scelta" : undefined}
+                title={isEmojiLocked(item) ? "Already chosen" : undefined}
                 onClick={() => {
                   setSaveState("idle");
                   void onEmojiChange(item);
@@ -1783,7 +1795,7 @@ function MobileRadar({
         type="button"
         onClick={onToggleOpen}
         aria-expanded={open}
-        aria-label={open ? "Chiudi friend radar" : "Apri friend radar"}
+        aria-label={open ? "Close friend radar" : "Open friend radar"}
       >
         <span />
       </button>
@@ -1819,7 +1831,7 @@ function MobileRadar({
                 }}
                 type="button"
                 aria-disabled={!friend.location}
-                title={friend.location ? undefined : "GPS non condiviso"}
+                title={friend.location ? undefined : "GPS not shared"}
                 onClick={() => {
                   if (friend.location) onFocusFriend(uid, friend.location);
                 }}
