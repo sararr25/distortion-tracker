@@ -120,6 +120,7 @@ void initMessaging()
           fromEmoji: data.fromEmoji,
           lat: data.lat,
           lng: data.lng,
+          message: data.message,
           url: data.url || (data.requestId ? `/?meetRequestId=${encodeURIComponent(data.requestId)}` : "/"),
         },
       };

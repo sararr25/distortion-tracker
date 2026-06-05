@@ -93,7 +93,6 @@ export async function POST(request: NextRequest) {
   const messaging = getMessaging();
   const tokens = Array.from(uniqueTokens.keys());
   const meetPath = `/?meetRequestId=${encodeURIComponent(payload.requestId)}`;
-  const meetUrl = `${request.nextUrl.origin}${meetPath}`;
   const meetData = {
     type: "meet",
     requestId: payload.requestId,
@@ -121,15 +120,11 @@ export async function POST(request: NextRequest) {
       headers: {
         Urgency: "high",
       },
-      fcmOptions: {
-        link: meetUrl,
-      },
       notification: {
         icon: "/icon-192.png",
         badge: "/icon-192.png",
         vibrate: [200, 100, 200, 100, 400],
         requireInteraction: true,
-        data: meetData,
       },
     },
   });
