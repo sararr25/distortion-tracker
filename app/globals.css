@@ -449,6 +449,128 @@ button {
   font-size: 0.6rem;
 }
 
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.92);
+  padding: 1.25rem;
+}
+
+.onboarding-card {
+  display: grid;
+  width: min(100%, 26rem);
+  justify-items: center;
+  gap: 1rem;
+  background: #0a0a0a;
+  color: #ccff00;
+  padding: 2rem 1.25rem 1.4rem;
+  text-align: center;
+}
+
+.onboarding-emoji {
+  font-size: 4rem;
+  line-height: 1;
+}
+
+.onboarding-card h2 {
+  margin: 0;
+  color: #ccff00;
+  font-family: var(--font-mono), monospace;
+  font-size: clamp(1.35rem, 7vw, 2rem);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  line-height: 1.1;
+}
+
+.onboarding-card p {
+  max-width: 20rem;
+  margin: 0;
+  color: #ffffff;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.55;
+}
+
+.onboarding-next,
+.onboarding-close {
+  min-height: 48px;
+  font-family: var(--font-mono), monospace;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.onboarding-next {
+  width: min(100%, 18rem);
+  margin-top: 0.35rem;
+  background: #ccff00;
+  color: #000000;
+  padding: 0.9rem 1rem;
+  font-size: 0.82rem;
+}
+
+.onboarding-close {
+  position: absolute;
+  top: max(1rem, env(safe-area-inset-top));
+  right: 1rem;
+  width: 48px;
+  background: transparent;
+  color: #ccff00;
+  font-size: 1.55rem;
+}
+
+.onboarding-dots {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.2rem;
+}
+
+.onboarding-dots span {
+  width: 0.48rem;
+  height: 0.48rem;
+  border: 1px solid #ccff00;
+  border-radius: 50%;
+}
+
+.onboarding-dots span.active {
+  background: #ccff00;
+}
+
+.sharing-toast {
+  position: absolute;
+  top: 5.65rem;
+  left: 50%;
+  z-index: 1000;
+  max-width: calc(100vw - 2rem);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  line-height: 1.25;
+  text-align: center;
+  text-transform: uppercase;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.sharing-toast.visible {
+  background: #ccff00;
+  color: #000000;
+}
+
+.sharing-toast.hidden {
+  background: #1a1a1a;
+  color: #666666;
+}
+
 .festival-tooltip {
   background: #0a0a0a !important;
   border: 1px solid #CCFF00 !important;
@@ -665,6 +787,23 @@ button {
   text-transform: uppercase;
   pointer-events: none;
   backdrop-filter: blur(18px);
+}
+
+.center-me-button {
+  position: absolute;
+  right: 1rem;
+  bottom: 17rem;
+  z-index: 1000;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid #333333;
+  border-radius: 50%;
+  background: #1a1a1a;
+  color: #ffffff;
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
 .command-center {
@@ -973,8 +1112,10 @@ button {
   justify-items: center;
   gap: 0.55rem;
   min-width: 5.8rem;
+  min-height: 48px;
   background: transparent;
   color: inherit;
+  cursor: pointer;
   text-align: center;
 }
 
@@ -1388,6 +1529,12 @@ button {
     left: 0.65rem;
   }
 
+  .sharing-toast {
+    top: 4.2rem;
+    font-size: 0.64rem;
+    white-space: normal;
+  }
+
   .search-box {
     width: min(100%, 16.5rem);
     height: 2.45rem;
@@ -1432,6 +1579,11 @@ button {
     padding: 0.45rem 0.55rem;
     font-size: 0.58rem;
     letter-spacing: 0.08em;
+  }
+
+  .center-me-button {
+    right: 0.75rem;
+    bottom: calc(15.6rem + env(safe-area-inset-bottom));
   }
 
   .mobile-radar {
@@ -1566,6 +1718,11 @@ button {
   .pulse-button {
     right: 1.5rem;
     bottom: 1.5rem;
+  }
+
+  .center-me-button {
+    right: 1.5rem;
+    bottom: 10rem;
   }
 
   .you-stage-badge {

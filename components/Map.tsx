@@ -10,6 +10,7 @@ type Props = {
   locations: Record<string, FriendLocation>;
   currentUid: string;
   mapStyle: MapStyle;
+  onMapReady?: (flyTo: (lat: number, lng: number) => void) => void;
   focusedLocation?: {
     lat: number;
     lng: number;
@@ -131,7 +132,7 @@ function iconAssetUrl(fileName: string) {
   return `/icons-zone/${encodeURIComponent(fileName)}`;
 }
 
-export default function Map({ locations, currentUid, mapStyle, focusedLocation }: Props) {
+export default function Map({ locations, currentUid, mapStyle, onMapReady, focusedLocation }: Props) {
   const mapRef = useRef<{ map: LeafletMap; L: LeafletModule } | null>(null);
   const markersRef = useRef<Record<string, Marker>>({});
   const labelMarkersRef = useRef<{ marker: Marker; zone: typeof FESTIVAL_ZONES[number] }[]>([]);
@@ -307,6 +308,7 @@ export default function Map({ locations, currentUid, mapStyle, focusedLocation }
       map.on("zoomend", updateMarkersByZoom);
 
       mapRef.current = { map, L };
+      onMapReady?.((lat, lng) => map.flyTo([lat, lng], 17, { animate: true, duration: 0.8 }));
       setReady(true);
     });
 
@@ -333,7 +335,7 @@ export default function Map({ locations, currentUid, mapStyle, focusedLocation }
       tileLayerRef.current = null;
       setReady(false);
     };
-  }, []);
+  }, [onMapReady]);
 
   useEffect(() => {
     if (!mapRef.current || !tileLayerRef.current) return;

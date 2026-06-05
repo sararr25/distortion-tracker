@@ -19,6 +19,23 @@ const EMOJIS = [
   "👸", "🦥", "🧔‍♂️", "🪩", "🧚", "🧙", "🤖", "👽",
   "🦄", "🌈", "🍒", "🧿", "🛸", "💎", "🫧", "🍄",
 ];
+const ONBOARDING_STEPS = [
+  {
+    emoji: "📍",
+    title: "SHARE YOUR POSITION",
+    description: "Tap the pin button to let your friends see where you are",
+  },
+  {
+    emoji: "⚡",
+    title: "SEND A PULSE",
+    description: "Tap the pulse button to vibrate everyone's phone and get their attention",
+  },
+  {
+    emoji: "👥",
+    title: "FIND YOUR CREW",
+    description: "Your friends appear on the map and in the radar below",
+  },
+];
 const FRESH_MS = 10 * 60 * 1000;
 
 type FriendProfile = {
@@ -108,6 +125,10 @@ export default function Home() {
   const pulseTimeoutRef = useRef<number | null>(null);
   const huntTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const huntNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sharingToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sharingToastReadyRef = useRef(false);
+  const activeFriendTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flyToRef = useRef<((lat: number, lng: number) => void) | null>(null);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
   const [localLocation, setLocalLocation] = useState<FriendLocation | undefined>();
@@ -130,6 +151,11 @@ export default function Home() {
   const [pulseChooserOpen, setPulseChooserOpen] = useState(false);
   const [pulseTargetUids, setPulseTargetUids] = useState<Set<string>>(() => new Set());
   const [focusedLocation, setFocusedLocation] = useState<{ lat: number; lng: number; focusId: number } | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(0);
+  const [showSharingToast, setShowSharingToast] = useState(false);
+  const [sharingToastMode, setSharingToastMode] = useState<"visible" | "hidden">("visible");
+  const [activeFriend, setActiveFriend] = useState<string | null>(null);
 
   const handleUpdate = useCallback((data: Record<string, FriendLocation>) => {
     setLocations(data);
@@ -150,6 +176,10 @@ export default function Home() {
     setGpsInterval(interval);
     if (interval === 3000) clearAutoHuntTimeout();
   }, [clearAutoHuntTimeout]);
+
+  const handleMapReady = useCallback((flyTo: (lat: number, lng: number) => void) => {
+    flyToRef.current = flyTo;
+  }, []);
 
   const displayName = profileName.trim() || user?.displayName || "Anonimo";
 
@@ -250,6 +280,37 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!user) return;
+
+    const timeout = window.setTimeout(() => {
+      if (window.localStorage.getItem("distortion_onboarded") !== "true") {
+        setOnboardingStep(0);
+        setShowOnboarding(true);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    if (!sharingToastReadyRef.current) {
+      sharingToastReadyRef.current = true;
+      return;
+    }
+
+    setSharingToastMode(sharing ? "visible" : "hidden");
+    setShowSharingToast(true);
+
+    if (sharingToastTimeoutRef.current) clearTimeout(sharingToastTimeoutRef.current);
+    sharingToastTimeoutRef.current = setTimeout(() => {
+      setShowSharingToast(false);
+      sharingToastTimeoutRef.current = null;
+    }, 3000);
+  }, [sharing, user]);
+
+  useEffect(() => {
     let lock: WakeLockSentinel | null = null;
     const enable = async () => {
       try {
@@ -281,6 +342,12 @@ export default function Home() {
       }
       if (huntNoticeTimeoutRef.current) {
         clearTimeout(huntNoticeTimeoutRef.current);
+      }
+      if (sharingToastTimeoutRef.current) {
+        clearTimeout(sharingToastTimeoutRef.current);
+      }
+      if (activeFriendTimeoutRef.current) {
+        clearTimeout(activeFriendTimeoutRef.current);
       }
     };
   }, []);
@@ -576,6 +643,7 @@ export default function Home() {
   }, [pulseTargetUids, sendPulse]);
 
   const handleFocusFriend = useCallback((friend: FriendLocation) => {
+    flyToRef.current?.(friend.lat, friend.lng);
     setFocusedLocation({
       lat: friend.lat,
       lng: friend.lng,
@@ -584,6 +652,45 @@ export default function Home() {
     setPanelOpen(false);
     setMenuOpen(false);
   }, []);
+
+  const handleRadarFriendFocus = useCallback((uid: string, friend: FriendLocation) => {
+    flyToRef.current?.(friend.lat, friend.lng);
+    setFocusedLocation({
+      lat: friend.lat,
+      lng: friend.lng,
+      focusId: Date.now(),
+    });
+    setActiveFriend(uid);
+
+    if (activeFriendTimeoutRef.current) clearTimeout(activeFriendTimeoutRef.current);
+    activeFriendTimeoutRef.current = setTimeout(() => {
+      setActiveFriend(null);
+      activeFriendTimeoutRef.current = null;
+    }, 1500);
+  }, []);
+
+  const handleCenterOnMe = useCallback(() => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        flyToRef.current?.(pos.coords.latitude, pos.coords.longitude);
+      },
+      (err) => console.error(err)
+    );
+  }, []);
+
+  const handleCloseOnboarding = useCallback(() => {
+    window.localStorage.setItem("distortion_onboarded", "true");
+    setShowOnboarding(false);
+  }, []);
+
+  const handleAdvanceOnboarding = useCallback(() => {
+    if (onboardingStep >= ONBOARDING_STEPS.length - 1) {
+      handleCloseOnboarding();
+      return;
+    }
+
+    setOnboardingStep((step) => step + 1);
+  }, [handleCloseOnboarding, onboardingStep]);
 
   async function handleLogin() {
     setAuthError("");
@@ -690,6 +797,14 @@ export default function Home() {
         </div>
       )}
 
+      {showOnboarding && (
+        <OnboardingOverlay
+          step={onboardingStep}
+          onNext={handleAdvanceOnboarding}
+          onClose={handleCloseOnboarding}
+        />
+      )}
+
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div className="noise-layer" />
@@ -732,6 +847,12 @@ export default function Home() {
         </button>
       </header>
 
+      {showSharingToast && (
+        <div className={sharingToastMode === "visible" ? "sharing-toast visible" : "sharing-toast hidden"}>
+          {sharingToastMode === "visible" ? "📡 YOUR POSITION IS NOW VISIBLE TO YOUR CREW" : "📍 POSITION HIDDEN"}
+        </div>
+      )}
+
       <div className="workspace">
         <section className="map-stage" id="map" aria-label="Mappa live">
           <div className="map-frame">
@@ -739,6 +860,7 @@ export default function Home() {
               locations={effectiveLocations}
               currentUid={user.uid}
               mapStyle={mapStyle}
+              onMapReady={handleMapReady}
               focusedLocation={focusedLocation}
             />
             <div className="map-style-switcher" aria-label="Map style">
@@ -790,6 +912,15 @@ export default function Home() {
           {currentStage && <div className="you-stage-badge">YOU: {currentStage}</div>}
 
           <button
+            className="center-me-button"
+            type="button"
+            aria-label="Center map on me"
+            onClick={handleCenterOnMe}
+          >
+            🎯
+          </button>
+
+          <button
             className="pulse-button"
             type="button"
             onClick={handleOpenPulseChooser}
@@ -804,7 +935,8 @@ export default function Home() {
             open={panelOpen}
             tick={tick}
             now={now}
-            onFocusFriend={handleFocusFriend}
+            activeFriend={activeFriend}
+            onFocusFriend={handleRadarFriendFocus}
             onToggleOpen={() => setPanelOpen((value) => !value)}
           />
         </section>
@@ -932,6 +1064,40 @@ function LoginScreen({
         {authError && <p className="auth-error">{authError}</p>}
       </section>
     </main>
+  );
+}
+
+function OnboardingOverlay({
+  step,
+  onNext,
+  onClose,
+}: {
+  step: number;
+  onNext: () => void;
+  onClose: () => void;
+}) {
+  const item = ONBOARDING_STEPS[step];
+  const isLastStep = step === ONBOARDING_STEPS.length - 1;
+
+  return (
+    <div className="onboarding-overlay" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <button className="onboarding-close" type="button" aria-label="Close onboarding" onClick={onClose}>
+        ×
+      </button>
+      <section className="onboarding-card">
+        <div className="onboarding-emoji">{item.emoji}</div>
+        <h2 id="onboarding-title">{item.title}</h2>
+        <p>{item.description}</p>
+        <button className="onboarding-next" type="button" onClick={onNext}>
+          {isLastStep ? "LET'S GO ⚡" : "NEXT →"}
+        </button>
+        <div className="onboarding-dots" aria-label={`Step ${step + 1} of ${ONBOARDING_STEPS.length}`}>
+          {ONBOARDING_STEPS.map((_, index) => (
+            <span key={index} className={index === step ? "active" : ""} />
+          ))}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1344,6 +1510,7 @@ function MobileRadar({
   open,
   tick,
   now,
+  activeFriend,
   onFocusFriend,
   onToggleOpen,
 }: {
@@ -1352,7 +1519,8 @@ function MobileRadar({
   open: boolean;
   tick: number;
   now: number;
-  onFocusFriend: (friend: FriendLocation) => void;
+  activeFriend: string | null;
+  onFocusFriend: (uid: string, friend: FriendLocation) => void;
   onToggleOpen: () => void;
 }) {
   return (
@@ -1383,11 +1551,14 @@ function MobileRadar({
               <button
                 className="mobile-friend"
                 key={uid}
+                style={{
+                  outline: activeFriend === uid ? "1px solid #CCFF00" : "1px solid transparent",
+                }}
                 type="button"
                 aria-disabled={!friend.location}
                 title={friend.location ? undefined : "GPS non condiviso"}
                 onClick={() => {
-                  if (friend.location) onFocusFriend(friend.location);
+                  if (friend.location) onFocusFriend(uid, friend.location);
                 }}
               >
                 <div>{friend.emoji}</div>
