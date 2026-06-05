@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { signInWithRedirect, signOut } from "firebase/auth";
-import { get, off, onChildAdded, onValue, push, ref, remove, runTransaction, serverTimestamp, set } from "firebase/database";
+import { get, off, onChildAdded, onDisconnect, onValue, push, ref, remove, runTransaction, serverTimestamp, update } from "firebase/database";
 import { auth, db, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
@@ -20,6 +20,23 @@ const EMOJIS = [
   "🦄", "🌈", "🍒", "🧿", "🛸", "💎", "🫧", "🍄",
 ];
 const FRESH_MS = 10 * 60 * 1000;
+
+type FriendProfile = {
+  name?: string;
+  emoji?: string;
+  online?: boolean;
+  updatedAt?: number;
+  lastSeen?: number;
+};
+
+type FriendSignal = {
+  name: string;
+  emoji: string;
+  online: boolean;
+  location?: FriendLocation;
+  updatedAt: number;
+  lastSeen: number;
+};
 
 function emojiKey(value: string) {
   return encodeURIComponent(value);
@@ -57,6 +74,14 @@ function formatDistance(from: FriendLocation | undefined, to: FriendLocation) {
   return `${Math.round(getDistance(from.lat, from.lng, to.lat, to.lng))}M`;
 }
 
+function isFreshLocation(location: FriendLocation | undefined, now: number): location is FriendLocation {
+  return Boolean(location && now - location.updatedAt <= FRESH_MS);
+}
+
+function normalizeTimestamp(value: unknown) {
+  return typeof value === "number" ? value : 0;
+}
+
 export default function Home() {
   const { user, loading } = useAuth();
   const isFirstLoad = useRef(true);
@@ -66,6 +91,10 @@ export default function Home() {
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
   const [localLocation, setLocalLocation] = useState<FriendLocation | undefined>();
   const [emoji, setEmoji] = useState("🔥");
+  const [gpsInterval, setGpsInterval] = useState<3000 | 30000>(30000);
+  const [profiles, setProfiles] = useState<Record<string, FriendProfile>>({});
+  const [profilesLoadedUid, setProfilesLoadedUid] = useState<string | null>(null);
+  const [profileHydratedUid, setProfileHydratedUid] = useState<string | null>(null);
   const [emojiLocks, setEmojiLocks] = useState<Record<string, string>>({});
   const [profileName, setProfileName] = useState("");
   const [query, setQuery] = useState("");
@@ -88,7 +117,35 @@ export default function Home() {
 
   const displayName = profileName.trim() || user?.displayName || "Anonimo";
 
-  useLocation(Boolean(user), sharing, emoji, displayName, handleUpdate, handleSelfUpdate);
+  useLocation(Boolean(user), sharing, emoji, gpsInterval, displayName, handleUpdate, handleSelfUpdate);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const uid = user.uid;
+    const profilesRef = ref(db, "profiles");
+    const unsubscribe = onValue(profilesRef, (snapshot) => {
+      setProfiles((snapshot.val() ?? {}) as Record<string, FriendProfile>);
+      setProfilesLoadedUid(uid);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || profilesLoadedUid !== user.uid || profileHydratedUid === user.uid) return;
+
+    const timeout = window.setTimeout(() => {
+      const profile = profiles[user.uid];
+      setProfileName(profile?.name ?? window.localStorage.getItem(`dt-profile-name-${user.uid}`) ?? user.displayName ?? "Anonimo");
+      setEmoji(profile?.emoji ?? window.localStorage.getItem(`dt-profile-emoji-${user.uid}`) ?? "🔥");
+      setProfileHydratedUid(user.uid);
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [profileHydratedUid, profiles, profilesLoadedUid, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -105,8 +162,8 @@ export default function Home() {
 
   const isEmojiLocked = useCallback((item: string) => {
     const owner = emojiLocks[emojiKey(item)];
-    return Boolean(user && owner && owner !== user.uid);
-  }, [emojiLocks, user]);
+    return Boolean(user && owner && owner !== user.uid && profiles[owner]?.online === true);
+  }, [emojiLocks, profiles, user]);
 
   const handleEmojiChange = useCallback(async (nextEmoji: string) => {
     if (!user || isEmojiLocked(nextEmoji)) return;
@@ -115,13 +172,14 @@ export default function Home() {
     const nextKey = emojiKey(nextEmoji);
     const result = await runTransaction(ref(db, `emojiLocks/${nextKey}`), (currentOwner) => {
       if (currentOwner === null || currentOwner === user.uid) return user.uid;
+      if (typeof currentOwner === "string" && profiles[currentOwner]?.online !== true) return user.uid;
       return;
     });
 
     if (!result.committed && result.snapshot.val() !== user.uid) return;
 
     setEmoji(nextEmoji);
-    await set(ref(db, `profiles/${user.uid}`), {
+    await update(ref(db, `profiles/${user.uid}`), {
       name: displayName,
       emoji: nextEmoji,
       updatedAt: serverTimestamp(),
@@ -135,7 +193,7 @@ export default function Home() {
     if (previousLock.val() === user.uid) {
       await remove(previousRef);
     }
-  }, [displayName, emoji, isEmojiLocked, user]);
+  }, [displayName, emoji, isEmojiLocked, profiles, user]);
 
   const handleSharingToggle = useCallback(() => {
     setSharing((value) => {
@@ -159,30 +217,21 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    const timeout = window.setTimeout(() => {
-      setProfileName(window.localStorage.getItem(`dt-profile-name-${user.uid}`) ?? user.displayName ?? "Anonimo");
-      setEmoji(window.localStorage.getItem(`dt-profile-emoji-${user.uid}`) ?? "🔥");
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [user]);
-
-  useEffect(() => {
-    if (!user || !profileName.trim()) return;
+    if (!user || profileHydratedUid !== user.uid || !profileName.trim()) return;
     window.localStorage.setItem(`dt-profile-name-${user.uid}`, profileName.trim());
-  }, [profileName, user]);
+  }, [profileHydratedUid, profileName, user]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || profileHydratedUid !== user.uid) return;
     window.localStorage.setItem(`dt-profile-emoji-${user.uid}`, emoji);
-  }, [emoji, user]);
+  }, [emoji, profileHydratedUid, user]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || profileHydratedUid !== user.uid) return;
     let timeout: number | undefined;
 
     const owner = emojiLocks[emojiKey(emoji)];
-    if (!owner || owner === user.uid) {
+    if (!owner || owner === user.uid || profiles[owner]?.online !== true) {
       timeout = window.setTimeout(() => void handleEmojiChange(emoji), 0);
       return () => {
         if (timeout) window.clearTimeout(timeout);
@@ -191,7 +240,7 @@ export default function Home() {
 
     const fallbackEmoji = EMOJIS.find((item) => {
       const fallbackOwner = emojiLocks[emojiKey(item)];
-      return !fallbackOwner || fallbackOwner === user.uid;
+      return !fallbackOwner || fallbackOwner === user.uid || profiles[fallbackOwner]?.online !== true;
     });
 
     if (fallbackEmoji) {
@@ -201,16 +250,47 @@ export default function Home() {
     return () => {
       if (timeout) window.clearTimeout(timeout);
     };
-  }, [emoji, emojiLocks, handleEmojiChange, user]);
+  }, [emoji, emojiLocks, handleEmojiChange, profileHydratedUid, profiles, user]);
 
   useEffect(() => {
-    if (!user) return;
-    void set(ref(db, `profiles/${user.uid}`), {
+    if (!user || profileHydratedUid !== user.uid) return;
+    void update(ref(db, `profiles/${user.uid}`), {
       name: displayName,
       emoji,
       updatedAt: serverTimestamp(),
     });
-  }, [displayName, emoji, user]);
+  }, [displayName, emoji, profileHydratedUid, user]);
+
+  useEffect(() => {
+    if (!user || profileHydratedUid !== user.uid) return;
+
+    const connectedRef = ref(db, ".info/connected");
+    const profileRef = ref(db, `profiles/${user.uid}`);
+    const unsubscribe = onValue(connectedRef, (snapshot) => {
+      if (snapshot.val() !== true) return;
+
+      void onDisconnect(profileRef)
+        .update({
+          online: false,
+          lastSeen: serverTimestamp(),
+        })
+        .then(() =>
+          update(profileRef, {
+            online: true,
+            lastSeen: serverTimestamp(),
+          })
+        )
+        .catch(console.error);
+    });
+
+    return () => {
+      unsubscribe();
+      void update(profileRef, {
+        online: false,
+        lastSeen: serverTimestamp(),
+      });
+    };
+  }, [profileHydratedUid, user]);
 
   const playPulseSound = useCallback(() => {
     const AudioContextConstructor =
@@ -244,6 +324,8 @@ export default function Home() {
   }, []);
 
   const triggerPulse = useCallback((name: string, pulseEmoji: string) => {
+    setGpsInterval(3000);
+
     if (navigator.vibrate) {
       navigator.vibrate([200, 100, 200, 100, 400]);
     }
@@ -291,21 +373,52 @@ export default function Home() {
   const liveEntries = useMemo(
     () =>
       Object.entries(effectiveLocations)
-        .filter(([, loc]) => now - loc.updatedAt <= FRESH_MS)
+        .filter(([, loc]) => isFreshLocation(loc, now))
         .sort(([, a], [, b]) => b.updatedAt - a.updatedAt),
     [effectiveLocations, now]
   );
 
-  const friends = useMemo(
-    () =>
-      liveEntries
-        .filter(([uid]) => uid !== user?.uid)
-        .filter(([, loc]) => loc.name.toLowerCase().includes(query.toLowerCase())),
-    [liveEntries, query, user?.uid]
-  );
+  const friends = useMemo(() => {
+    const liveLocationUids = liveEntries.map(([uid]) => uid);
+    const knownUids = new Set([...Object.keys(profiles), ...liveLocationUids]);
+
+    return Array.from(knownUids)
+      .filter((uid) => uid !== user?.uid)
+      .map((uid): [string, FriendSignal] | null => {
+        const profile = profiles[uid];
+        const location = effectiveLocations[uid];
+        const freshLocation = isFreshLocation(location, now) ? location : undefined;
+        const online = profile?.online === true || Boolean(freshLocation);
+
+        if (!online) return null;
+
+        const name = profile?.name?.trim() || freshLocation?.name || "Anonimo";
+        const emoji = profile?.emoji || freshLocation?.emoji || "🔥";
+
+        return [
+          uid,
+          {
+            name,
+            emoji,
+            online,
+            location: freshLocation,
+            updatedAt: freshLocation?.updatedAt ?? normalizeTimestamp(profile?.updatedAt),
+            lastSeen: normalizeTimestamp(profile?.lastSeen),
+          },
+        ];
+      })
+      .filter((entry): entry is [string, FriendSignal] => Boolean(entry))
+      .filter(([, friend]) => friend.name.toLowerCase().includes(query.toLowerCase()))
+      .sort(([, a], [, b]) => {
+        const aTime = a.location?.updatedAt ?? a.lastSeen ?? a.updatedAt;
+        const bTime = b.location?.updatedAt ?? b.lastSeen ?? b.updatedAt;
+        return bTime - aTime;
+      });
+  }, [effectiveLocations, liveEntries, now, profiles, query, user?.uid]);
 
   const currentLocation = user ? effectiveLocations[user.uid] : undefined;
   const currentStage = sharing && currentLocation ? getNearestStage(currentLocation.lat, currentLocation.lng) : "";
+  const onlineCount = friends.length + 1;
 
   const handleOpenPulseChooser = useCallback(() => {
     setPulseTargetUids(new Set(friends.map(([uid]) => uid)));
@@ -374,6 +487,12 @@ export default function Home() {
     setPanelOpen(false);
     setSharing(false);
     setLocalLocation(undefined);
+    if (user) {
+      await update(ref(db, `profiles/${user.uid}`), {
+        online: false,
+        lastSeen: serverTimestamp(),
+      }).catch(console.error);
+    }
     await signOut(auth);
   }
 
@@ -494,7 +613,7 @@ export default function Home() {
               />
             </label>
             <div className="map-tools" aria-label="Stato mappa">
-              <span>{liveEntries.length} LIVE</span>
+              <span>{onlineCount} ONLINE</span>
               <span>{sharing ? "GPS ACTIVE" : "GPS MUTED"}</span>
             </div>
           </div>
@@ -526,7 +645,6 @@ export default function Home() {
             friends={friends}
             currentLocation={currentLocation}
             open={panelOpen}
-            sharing={sharing}
             onFocusFriend={handleFocusFriend}
             onToggleOpen={() => setPanelOpen((value) => !value)}
           />
@@ -536,12 +654,14 @@ export default function Home() {
           currentLocation={currentLocation}
           friends={friends}
           emoji={emoji}
+          gpsInterval={gpsInterval}
           emojis={EMOJIS}
           now={now}
           profileName={profileName}
           userName={displayName}
           userEmail={user.email ?? "Nessuna email"}
           onLogout={handleLogout}
+          onGpsIntervalChange={setGpsInterval}
           onNameChange={setProfileName}
           onEmojiChange={handleEmojiChange}
           onFocusFriend={handleFocusFriend}
@@ -553,12 +673,14 @@ export default function Home() {
       <MobileMenu
         open={menuOpen}
         emoji={emoji}
+        gpsInterval={gpsInterval}
         emojis={EMOJIS}
         displayName={displayName}
         profileName={profileName}
         userEmail={user.email ?? "Nessuna email"}
         onClose={() => setMenuOpen(false)}
         onEmojiChange={handleEmojiChange}
+        onGpsIntervalChange={setGpsInterval}
         onLogout={handleLogout}
         onNameChange={setProfileName}
         isEmojiLocked={isEmojiLocked}
@@ -652,16 +774,66 @@ function LoginScreen({
   );
 }
 
+function GpsModeControl({
+  gpsInterval,
+  onGpsIntervalChange,
+}: {
+  gpsInterval: 3000 | 30000;
+  onGpsIntervalChange: (interval: 3000 | 30000) => void;
+}) {
+  return (
+    <div>
+      <p style={{ color: "#666", fontFamily: "monospace", fontSize: "0.75rem", marginBottom: "0.75rem", letterSpacing: "0.1em" }}>GPS MODE</p>
+      <div style={{ display: "flex", gap: "0.5rem" }}>
+        <button
+          type="button"
+          aria-pressed={gpsInterval === 30000}
+          onClick={() => onGpsIntervalChange(30000)}
+          style={{
+            flex: 1, padding: "0.85rem", fontFamily: "monospace", fontWeight: 900,
+            fontSize: "0.85rem", letterSpacing: "0.1em", cursor: "pointer",
+            borderRadius: "6px", border: "none",
+            background: gpsInterval === 30000 ? "#1a1a1a" : "transparent",
+            color: gpsInterval === 30000 ? "#CCFF00" : "#444",
+            outline: gpsInterval === 30000 ? "1px solid #CCFF00" : "1px solid #333",
+          }}
+        >
+          🔋 CHILL<br />
+          <span style={{ fontSize: "0.7rem", fontWeight: 400, opacity: 0.7 }}>30s · save battery</span>
+        </button>
+        <button
+          type="button"
+          aria-pressed={gpsInterval === 3000}
+          onClick={() => onGpsIntervalChange(3000)}
+          style={{
+            flex: 1, padding: "0.85rem", fontFamily: "monospace", fontWeight: 900,
+            fontSize: "0.85rem", letterSpacing: "0.1em", cursor: "pointer",
+            borderRadius: "6px", border: "none",
+            background: gpsInterval === 3000 ? "#1a1a1a" : "transparent",
+            color: gpsInterval === 3000 ? "#FF6B00" : "#444",
+            outline: gpsInterval === 3000 ? "1px solid #FF6B00" : "1px solid #333",
+          }}
+        >
+          🔍 HUNT<br />
+          <span style={{ fontSize: "0.7rem", fontWeight: 400, opacity: 0.7 }}>3s · find friends</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CommandCenter({
   currentLocation,
   friends,
   emoji,
+  gpsInterval,
   emojis,
   now,
   profileName,
   userName,
   userEmail,
   onLogout,
+  onGpsIntervalChange,
   onNameChange,
   onEmojiChange,
   onFocusFriend,
@@ -669,14 +841,16 @@ function CommandCenter({
   isEmojiLocked,
 }: {
   currentLocation?: FriendLocation;
-  friends: [string, FriendLocation][];
+  friends: [string, FriendSignal][];
   emoji: string;
+  gpsInterval: 3000 | 30000;
   emojis: string[];
   now: number;
   profileName: string;
   userName: string;
   userEmail: string;
   onLogout: () => void;
+  onGpsIntervalChange: (interval: 3000 | 30000) => void;
   onNameChange: (name: string) => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
   onFocusFriend: (friend: FriendLocation) => void;
@@ -721,6 +895,10 @@ function CommandCenter({
       </section>
 
       <section className="panel-block">
+        <GpsModeControl gpsInterval={gpsInterval} onGpsIntervalChange={onGpsIntervalChange} />
+      </section>
+
+      <section className="panel-block">
         <p className="panel-label">[EMOJI_SELECT]</p>
         <div className="marker-grid">
           {emojis.map((item) => (
@@ -742,17 +920,28 @@ function CommandCenter({
       <section className="panel-block friend-list">
         <p className="panel-label">[ACTIVE_AGENTS]</p>
         {friends.length === 0 ? (
-          <div className="empty-state">NO FRIEND SIGNALS</div>
+          <div className="empty-state">NO FRIENDS ONLINE</div>
         ) : (
           friends.map(([uid, friend]) => (
-            <button className="friend-row" key={uid} type="button" onClick={() => onFocusFriend(friend)}>
+            <button
+              className="friend-row"
+              key={uid}
+              type="button"
+              aria-disabled={!friend.location}
+              title={friend.location ? undefined : "GPS non condiviso"}
+              onClick={() => {
+                if (friend.location) onFocusFriend(friend.location);
+              }}
+            >
               <div>
                 <span className="friend-beacon" />
                 <strong>{friend.emoji} {friend.name.split(" ")[0]}</strong>
-                <small className="friend-stage">{getNearestStage(friend.lat, friend.lng)}</small>
-                <small>{formatDistance(currentLocation, friend)} AWAY</small>
+                <small className="friend-stage">
+                  {friend.location ? getNearestStage(friend.location.lat, friend.location.lng) : "ONLINE"}
+                </small>
+                <small>{friend.location ? `${formatDistance(currentLocation, friend.location)} AWAY` : "GPS MUTED"}</small>
               </div>
-              <time>{formatAge(friend.updatedAt, now)}</time>
+              <time>{friend.location ? formatAge(friend.location.updatedAt, now) : "ONLINE"}</time>
             </button>
           ))
         )}
@@ -774,7 +963,7 @@ function PulseChooser({
   onSendSelected,
   onToggleTarget,
 }: {
-  friends: [string, FriendLocation][];
+  friends: [string, FriendSignal][];
   open: boolean;
   selectedUids: Set<string>;
   onClose: () => void;
@@ -803,7 +992,7 @@ function PulseChooser({
 
         <div className="pulse-choice-list" aria-label="Seleziona destinatari">
           {friends.length === 0 ? (
-            <div className="empty-state">NO FRIEND SIGNALS</div>
+            <div className="empty-state">NO FRIENDS ONLINE</div>
           ) : (
             friends.map(([uid, friend]) => (
               <label className="pulse-choice-row" key={uid}>
@@ -814,7 +1003,7 @@ function PulseChooser({
                 />
                 <span>{friend.emoji}</span>
                 <strong>{friend.name.split(" ")[0]}</strong>
-                <small>{getNearestStage(friend.lat, friend.lng)}</small>
+                <small>{friend.location ? getNearestStage(friend.location.lat, friend.location.lng) : "ONLINE"}</small>
               </label>
             ))
           )}
@@ -836,24 +1025,28 @@ function PulseChooser({
 function MobileMenu({
   open,
   emoji,
+  gpsInterval,
   emojis,
   displayName,
   profileName,
   userEmail,
   onClose,
   onEmojiChange,
+  onGpsIntervalChange,
   onLogout,
   onNameChange,
   isEmojiLocked,
 }: {
   open: boolean;
   emoji: string;
+  gpsInterval: 3000 | 30000;
   emojis: string[];
   displayName: string;
   profileName: string;
   userEmail: string;
   onClose: () => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
+  onGpsIntervalChange: (interval: 3000 | 30000) => void;
   onLogout: () => void;
   onNameChange: (name: string) => void;
   isEmojiLocked: (emoji: string) => boolean;
@@ -882,6 +1075,7 @@ function MobileMenu({
           />
         </label>
         <span className="menu-email">{userEmail}</span>
+        <GpsModeControl gpsInterval={gpsInterval} onGpsIntervalChange={onGpsIntervalChange} />
         <div className="marker-grid compact">
           {emojis.map((item) => (
             <button
@@ -915,14 +1109,12 @@ function MobileRadar({
   currentLocation,
   friends,
   open,
-  sharing,
   onFocusFriend,
   onToggleOpen,
 }: {
   currentLocation?: FriendLocation;
-  friends: [string, FriendLocation][];
+  friends: [string, FriendSignal][];
   open: boolean;
-  sharing: boolean;
   onFocusFriend: (friend: FriendLocation) => void;
   onToggleOpen: () => void;
 }) {
@@ -943,13 +1135,22 @@ function MobileRadar({
       </div>
       <div className="mobile-friends">
         {friends.length === 0 ? (
-          <div className="mobile-empty">{sharing ? "WAITING FOR SIGNALS" : "GO LIVE TO BROADCAST"}</div>
+          <div className="mobile-empty">NO FRIENDS ONLINE</div>
         ) : (
           friends.map(([uid, friend]) => (
-            <button className="mobile-friend" key={uid} type="button" onClick={() => onFocusFriend(friend)}>
+            <button
+              className="mobile-friend"
+              key={uid}
+              type="button"
+              aria-disabled={!friend.location}
+              title={friend.location ? undefined : "GPS non condiviso"}
+              onClick={() => {
+                if (friend.location) onFocusFriend(friend.location);
+              }}
+            >
               <div>{friend.emoji}</div>
-              <span>{friend.name.split(" ")[0]} · {formatDistance(currentLocation, friend)}</span>
-              <small>{getNearestStage(friend.lat, friend.lng)}</small>
+              <span>{friend.name.split(" ")[0]} · {friend.location ? formatDistance(currentLocation, friend.location) : "ONLINE"}</span>
+              <small>{friend.location ? getNearestStage(friend.location.lat, friend.location.lng) : "GPS MUTED"}</small>
             </button>
           ))
         )}
