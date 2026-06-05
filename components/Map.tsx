@@ -67,6 +67,12 @@ const TILE_LAYERS = {
   },
 };
 
+const TILE_LAYER_CLASSES: Record<MapStyle, string> = {
+  dark: "festival-tiles festival-tiles--dark",
+  light: "festival-tiles festival-tiles--light",
+  satellite: "festival-tiles festival-tiles--satellite",
+};
+
 function getZoomScale(zoom: number): number {
   return Math.pow(1.6, zoom - 16);
 }
@@ -154,25 +160,30 @@ function getZoneLabelMetrics(zoom: number, isMobile: boolean, mode: ZoneLabelMod
     ? Math.min(12, Math.max(9, 8 + (zoom - 15)))
     : Math.min(14, Math.max(11, 10 + (zoom - 16)));
   const iconSize = mode === "stacked"
-    ? (isMobile ? Math.min(24, Math.max(19, 17 + (zoom - 15))) : Math.min(26, Math.max(20, 18 + (zoom - 16))))
-    : (isMobile ? Math.min(23, Math.max(18, 16 + (zoom - 15))) : Math.min(25, Math.max(19, 17 + (zoom - 16))));
-  const gap = isMobile ? 3 : 4;
+    ? (isMobile ? Math.min(30, Math.max(22, 20 + (zoom - 15))) : Math.min(32, Math.max(24, 22 + (zoom - 16))))
+    : (isMobile ? Math.min(28, Math.max(21, 19 + (zoom - 15))) : Math.min(30, Math.max(23, 21 + (zoom - 16))));
+  const gap = isMobile ? 2 : 3;
   const padX = mode === "stacked" ? (isMobile ? 7 : 8) : (isMobile ? 8 : 10);
   const padY = mode === "stacked" ? (isMobile ? 5 : 6) : (isMobile ? 4 : 5);
   const width = mode === "stacked"
-    ? Math.max(54, iconSize + padX * 2)
-    : Math.max(74, Math.round(name.length * textSize * 0.62 + iconSize + padX * 2 + 8));
+    ? Math.max(48, iconSize + 6)
+    : Math.max(72, Math.round(name.length * textSize * 0.58 + iconSize + 6));
   const height = mode === "stacked"
-    ? Math.max(48, iconSize + textSize + gap + padY * 2 + 4)
-    : Math.max(28, Math.max(iconSize + padY * 2, Math.round(textSize * 1.35 + padY * 2)));
+    ? Math.max(44, iconSize + textSize + gap + 2)
+    : Math.max(26, Math.max(iconSize, Math.round(textSize * 1.3 + 2)));
 
   return { textSize, iconSize, gap, padX, padY, width, height };
 }
 
 function getPoiSize(zoom: number, isMobile: boolean, poiName: string) {
-  const base = isMobile ? 28 : 24;
-  const boost = poiName === "WATER" || poiName === "WC" || poiName === "TOILETS" ? 4 : 2;
-  return Math.min(isMobile ? 32 : 30, Math.max(base, base + Math.max(0, zoom - 16) + boost));
+  const isPriorityPoi = poiName === "WATER" || poiName === "WC" || poiName === "TOILETS";
+  const base = isPriorityPoi
+    ? (isMobile ? 35 : 32)
+    : (isMobile ? 30 : 27);
+  const max = isPriorityPoi
+    ? (isMobile ? 40 : 36)
+    : (isMobile ? 34 : 31);
+  return Math.min(max, Math.max(base, base + Math.max(0, zoom - 16)));
 }
 
 export default function Map({ locations, currentUid, mapStyle, meetingPoint, onMapReady, focusedLocation }: Props) {
@@ -265,6 +276,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
       const tileLayer = TILE_LAYERS[mapStyleRef.current];
       tileLayerRef.current = L.tileLayer(tileLayer.url, {
         attribution: tileLayer.attribution,
+        className: TILE_LAYER_CLASSES[mapStyleRef.current],
       }).addTo(map);
 
       const paneDefinitions: Array<[string, number]> = [
@@ -378,6 +390,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
     tileLayerRef.current.remove();
     tileLayerRef.current = L.tileLayer(tileLayer.url, {
       attribution: tileLayer.attribution,
+      className: TILE_LAYER_CLASSES[mapStyle],
     }).addTo(map);
   }, [mapStyle]);
 
