@@ -24,6 +24,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
 import Lineup from "@/components/Lineup";
 import { getNearestStage } from "@/components/Map";
+import {
+  hasSavedFcmToken,
+  isPushSupported,
+  listenForForegroundMessages,
+  requestNotificationPermissionAndToken,
+} from "@/lib/pushNotifications";
 
 const Map = dynamic(() => import("@/components/Map"), {
   ssr: false,
@@ -88,6 +94,38 @@ type MeetingPoint = {
 type MeetingPointEvent = MeetingPoint & {
   uid?: string;
   fromEmoji?: string;
+};
+
+type MeetRequest = {
+  id: string;
+  type: "meet";
+  fromUid: string;
+  fromName: string;
+  fromEmoji: string;
+  lat: number;
+  lng: number;
+  message: string;
+  createdAt: number;
+  expiresAt: number;
+};
+
+type PushStatus =
+  | "loading"
+  | "disabled"
+  | "enabled"
+  | "blocked"
+  | "unsupported"
+  | "ios-home-screen"
+  | "saving"
+  | "error";
+
+type MeetToast = {
+  message: string;
+  variant: "success" | "warning" | "error";
+};
+
+type MeetAlert = MeetRequest & {
+  source: "realtime" | "push";
 };
 
 // Firebase rules reminder: "meetingPoint": { ".read": "auth != null", ".write": "auth != null" }
@@ -180,10 +218,23 @@ function normalizeTimestamp(value: unknown) {
   return typeof value === "number" ? value : 0;
 }
 
+function getCurrentPositionAsync(options?: PositionOptions) {
+  return new Promise<GeolocationPosition>((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, options);
+  });
+}
+
+function makeMeetRequestId(uid: string) {
+  return `${uid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export default function Home() {
   const { user, loading } = useAuth();
   const isFirstLoad = useRef(true);
   const pulseTimeoutRef = useRef<number | null>(null);
+  const meetAlertTimeoutRef = useRef<number | null>(null);
+  const meetToastTimeoutRef = useRef<number | null>(null);
+  const meetCooldownTimeoutRef = useRef<number | null>(null);
   const huntTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const huntNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const titleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -193,6 +244,8 @@ export default function Home() {
   const installBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioUnlockedRef = useRef(false);
+  const shownMeetRequestIdsRef = useRef<Set<string>>(new Set());
   const flyToRef = useRef<((lat: number, lng: number) => void) | null>(null);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
@@ -221,6 +274,12 @@ export default function Home() {
   const [meetingPoint, setMeetingPoint] = useState<MeetingPoint | null>(null);
   const [meetModalOpen, setMeetModalOpen] = useState(false);
   const [meetLabel, setMeetLabel] = useState("");
+  const [meetAlert, setMeetAlert] = useState<MeetAlert | null>(null);
+  const [meetToast, setMeetToast] = useState<MeetToast | null>(null);
+  const [meetCooldownUntil, setMeetCooldownUntil] = useState(0);
+  const [meetSending, setMeetSending] = useState(false);
+  const [pushStatus, setPushStatus] = useState<PushStatus>("loading");
+  const [pushBusy, setPushBusy] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [installBannerMode, setInstallBannerMode] = useState<"android" | "ios" | null>(null);
@@ -247,11 +306,142 @@ export default function Home() {
     flyToRef.current = flyTo;
   }, []);
 
-  const requestNotificationPermission = useCallback(() => {
-    if ("Notification" in window && Notification.permission === "default") {
-      void Notification.requestPermission();
+  const isMeetCoolingDown = meetCooldownUntil > Date.now();
+
+  const showMeetToast = useCallback((message: string, variant: MeetToast["variant"]) => {
+    setMeetToast({ message, variant });
+    if (meetToastTimeoutRef.current) {
+      window.clearTimeout(meetToastTimeoutRef.current);
+    }
+    meetToastTimeoutRef.current = window.setTimeout(() => {
+      setMeetToast(null);
+      meetToastTimeoutRef.current = null;
+    }, 3200);
+  }, []);
+
+  const lockMeetActions = useCallback((durationMs = 8000) => {
+    setMeetCooldownUntil(Date.now() + durationMs);
+    if (meetCooldownTimeoutRef.current) {
+      window.clearTimeout(meetCooldownTimeoutRef.current);
+    }
+    meetCooldownTimeoutRef.current = window.setTimeout(() => {
+      setMeetCooldownUntil(0);
+      meetCooldownTimeoutRef.current = null;
+    }, durationMs);
+  }, []);
+
+  const dismissMeetAlert = useCallback(() => {
+    setMeetAlert(null);
+    if (meetAlertTimeoutRef.current) {
+      window.clearTimeout(meetAlertTimeoutRef.current);
+      meetAlertTimeoutRef.current = null;
     }
   }, []);
+
+  const focusMeetRequest = useCallback((request: MeetRequest) => {
+    const lat = Number(request.lat);
+    const lng = Number(request.lng);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      flyToRef.current?.(lat, lng);
+      setFocusedLocation({ lat, lng, focusId: Date.now() });
+    }
+    dismissMeetAlert();
+  }, [dismissMeetAlert]);
+
+  const triggerMeetRequestAlert = useCallback((request: MeetRequest, source: "realtime" | "push") => {
+    if (shownMeetRequestIdsRef.current.has(request.id)) return;
+    shownMeetRequestIdsRef.current.add(request.id);
+
+    if (navigator.vibrate) {
+      navigator.vibrate([200, 100, 200, 100, 400]);
+    }
+
+    if (audioUnlockedRef.current) {
+      try {
+        const AudioContextConstructor =
+          window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+        if (AudioContextConstructor) {
+          const ctx = audioContextRef.current ?? new AudioContextConstructor();
+          audioContextRef.current = ctx;
+          void ctx.resume().then(() => {
+            [0, 0.18].forEach((startTime) => {
+              const osc = ctx.createOscillator();
+              const gain = ctx.createGain();
+              osc.connect(gain);
+              gain.connect(ctx.destination);
+              osc.type = "triangle";
+              osc.frequency.setValueAtTime(220, ctx.currentTime + startTime);
+              osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + startTime + 0.18);
+              gain.gain.setValueAtTime(0.8, ctx.currentTime + startTime);
+              gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + 0.22);
+              osc.start(ctx.currentTime + startTime);
+              osc.stop(ctx.currentTime + startTime + 0.24);
+            });
+          });
+        }
+      } catch (error) {
+        console.warn("Meet sound failed:", error);
+      }
+    }
+
+    document.title = `📍 MEET: ${request.fromName.toUpperCase()}`;
+    if (titleTimeoutRef.current) clearTimeout(titleTimeoutRef.current);
+    titleTimeoutRef.current = setTimeout(() => {
+      document.title = "Distortion Tracker";
+      titleTimeoutRef.current = null;
+    }, 10000);
+
+    setMeetAlert({ ...request, source });
+    if (meetAlertTimeoutRef.current) {
+      window.clearTimeout(meetAlertTimeoutRef.current);
+    }
+    meetAlertTimeoutRef.current = window.setTimeout(() => {
+      setMeetAlert(null);
+      meetAlertTimeoutRef.current = null;
+    }, 10000);
+  }, []);
+
+  const registerPushToken = useCallback(async () => {
+    if (!user) return;
+
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const standalone =
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true ||
+      window.matchMedia("(display-mode: standalone)").matches;
+
+    if (ios && !standalone) {
+      setPushStatus("ios-home-screen");
+      return;
+    }
+
+    setPushBusy(true);
+    try {
+      const result = await requestNotificationPermissionAndToken(user);
+      if (result.status === "enabled") {
+        setPushStatus("enabled");
+        showMeetToast("Push notifications enabled", "success");
+        return;
+      }
+      if (result.status === "blocked") {
+        setPushStatus("blocked");
+        showMeetToast("Notifications blocked", "warning");
+        return;
+      }
+      if (result.status === "unsupported") {
+        setPushStatus("unsupported");
+        showMeetToast("Push not supported in this browser", "warning");
+        return;
+      }
+      setPushStatus("disabled");
+    } catch (error) {
+      console.error("Failed to enable push notifications:", error);
+      setPushStatus("error");
+      showMeetToast("Push setup failed", "error");
+    } finally {
+      setPushBusy(false);
+    }
+  }, [showMeetToast, user]);
 
   const displayName = profileName.trim() || user?.displayName || "Anonymous";
   const isIOS = typeof navigator !== "undefined" && /iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -350,6 +540,126 @@ export default function Home() {
   }, [user]);
 
   useEffect(() => {
+    if (!user) return;
+
+    let cancelled = false;
+
+    const initializePush = async () => {
+      try {
+        const supported = await isPushSupported();
+        if (cancelled) return;
+
+        if (!supported) {
+          setPushStatus("unsupported");
+          return;
+        }
+
+        if (isIOS && !isInStandaloneMode) {
+          setPushStatus("ios-home-screen");
+          return;
+        }
+
+        if (Notification.permission === "denied") {
+          setPushStatus("blocked");
+          return;
+        }
+
+        if (Notification.permission === "granted") {
+          const hasToken = await hasSavedFcmToken(user);
+          if (cancelled) return;
+          if (!hasToken) {
+            const tokenResult = await requestNotificationPermissionAndToken(user);
+            if (cancelled) return;
+            setPushStatus(tokenResult.status === "enabled" ? "enabled" : "disabled");
+            return;
+          }
+        }
+
+        const hasToken = await hasSavedFcmToken(user);
+        if (cancelled) return;
+
+        setPushStatus(hasToken ? "enabled" : "disabled");
+      } catch (error) {
+        console.warn("Push support check failed:", error);
+        if (!cancelled) setPushStatus("error");
+      }
+    };
+
+    void initializePush();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isIOS, isInStandaloneMode, user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    let cancelled = false;
+    let unsubscribeForeground: (() => void) | undefined;
+
+    const initializeForegroundListener = async () => {
+      try {
+        const supported = await isPushSupported();
+        if (!supported) return;
+
+        unsubscribeForeground = await listenForForegroundMessages((payload) => {
+          const data = payload.data;
+          if (!data || data.type !== "meet" || !data.requestId || !data.fromUid || !data.fromName || !data.fromEmoji) {
+            return;
+          }
+
+          if (data.fromUid === user.uid) return;
+
+          triggerMeetRequestAlert({
+            id: data.requestId,
+            type: "meet",
+            fromUid: data.fromUid,
+            fromName: data.fromName,
+            fromEmoji: data.fromEmoji,
+            lat: Number(data.lat),
+            lng: Number(data.lng),
+            message: data.message || `${data.fromName} wants to meet`,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 10 * 60 * 1000,
+          }, "push");
+        });
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Foreground push listener failed:", error);
+        }
+      }
+    };
+
+    void initializeForegroundListener();
+
+    return () => {
+      cancelled = true;
+      unsubscribeForeground?.();
+    };
+  }, [triggerMeetRequestAlert, user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const listeningSince = Date.now();
+    const meetRequestsRef = databaseQuery(ref(db, "meetingRequests"), limitToLast(50));
+    const unsub = onChildAdded(meetRequestsRef, (snapshot) => {
+      const request = snapshot.val() as MeetRequest | null;
+      if (!request || request.type !== "meet") return;
+      if (!request.id || shownMeetRequestIdsRef.current.has(request.id)) return;
+      if (request.fromUid === user.uid) return;
+      if (request.createdAt && request.createdAt < listeningSince - 5000) return;
+      if (request.expiresAt && request.expiresAt < Date.now()) return;
+      triggerMeetRequestAlert(request, "realtime");
+    });
+
+    return () => {
+      unsub();
+    };
+  }, [triggerMeetRequestAlert, user]);
+
+  useEffect(() => {
     const isDismissed = window.localStorage.getItem("pwa_banner_dismissed") === "true";
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent ?? "");
     const isInStandaloneMode =
@@ -421,11 +731,10 @@ export default function Home() {
   }, [displayName, emoji, isEmojiLocked, profiles, user]);
 
   const handleSharingToggle = useCallback(() => {
-    requestNotificationPermission();
     setSharing((value) => {
       return !value;
     });
-  }, [requestNotificationPermission]);
+  }, []);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNow(Date.now()), 15000);
@@ -491,15 +800,12 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if ("Notification" in window && Notification.permission === "default") {
-      void Notification.requestPermission();
-    }
-  }, []);
-
-  useEffect(() => {
     if ("serviceWorker" in navigator) {
       void navigator.serviceWorker.register("/sw.js").catch((error) => {
         console.warn("Service worker registration failed:", error);
+      });
+      void navigator.serviceWorker.register("/firebase-messaging-sw.js").catch((error) => {
+        console.warn("Messaging service worker registration failed:", error);
       });
     }
   }, []);
@@ -507,6 +813,7 @@ export default function Home() {
   useEffect(() => {
     const unlockAudio = () => {
       try {
+        audioUnlockedRef.current = true;
         const AudioContextConstructor =
           window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
 
@@ -879,10 +1186,9 @@ export default function Home() {
   const onlineCount = friends.length + 1;
 
   const handleOpenPulseChooser = useCallback(() => {
-    requestNotificationPermission();
     setPulseTargetUids(new Set(friends.map(([uid]) => uid)));
     setPulseChooserOpen(true);
-  }, [friends, requestNotificationPermission]);
+  }, [friends]);
 
   const handlePulseTargetToggle = useCallback((uid: string) => {
     setPulseTargetUids((current) => {
@@ -903,7 +1209,6 @@ export default function Home() {
   const sendPulse = useCallback(async (recipients?: string[]) => {
     if (recipients && recipients.length === 0) return;
 
-    requestNotificationPermission();
     triggerPulse(displayName, emoji, false);
     setPulseChooserOpen(false);
     await push(ref(db, "pulses"), {
@@ -913,7 +1218,7 @@ export default function Home() {
       recipients: recipients ?? null,
       at: serverTimestamp(),
     });
-  }, [displayName, emoji, requestNotificationPermission, triggerPulse]);
+  }, [displayName, emoji, triggerPulse]);
 
   const handleSendPulseToAll = useCallback(() => {
     void sendPulse();
@@ -959,35 +1264,94 @@ export default function Home() {
     );
   }, []);
 
-  const handleSetMeetingPoint = useCallback(() => {
-    if (!user) return;
+  const handleOpenMeetModal = useCallback(() => {
+    if (isMeetCoolingDown) {
+      showMeetToast("Meet request sent", "warning");
+      return;
+    }
+    setMeetModalOpen(true);
+  }, [isMeetCoolingDown, showMeetToast]);
 
-    requestNotificationPermission();
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const label = meetLabel.trim() || "MEET HERE";
-        const event = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          label,
-          setBy: displayName,
-          fromEmoji: emoji,
-          uid: user.uid,
-          setAt: Date.now(),
-        };
+  const handleSetMeetingPoint = useCallback(async () => {
+    if (!user || isMeetCoolingDown || meetSending) return;
 
-        void set(ref(db, "meetingPoint"), event).then(async () => {
-          await push(ref(db, "meetingPointEvents"), {
-            ...event,
-            at: serverTimestamp(),
-          });
-          setMeetModalOpen(false);
-          setMeetLabel("");
+    const label = meetLabel.trim() || "MEET HERE";
+    const requestId = makeMeetRequestId(user.uid);
+
+    try {
+      setMeetSending(true);
+      const position = await getCurrentPositionAsync({ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      const message = `${displayName} wants to meet`;
+      const createdAt = Date.now();
+      const expiresAt = createdAt + 10 * 60 * 1000;
+
+      const request: MeetRequest = {
+        id: requestId,
+        type: "meet",
+        fromUid: user.uid,
+        fromName: displayName,
+        fromEmoji: emoji,
+        lat,
+        lng,
+        message,
+        createdAt,
+        expiresAt,
+      };
+
+      const meetingPointEvent: MeetingPointEvent = {
+        lat,
+        lng,
+        label,
+        setBy: displayName,
+        fromEmoji: emoji,
+        uid: user.uid,
+        setAt: createdAt,
+      };
+
+      await set(ref(db, "meetingPoint"), meetingPointEvent);
+      await push(ref(db, "meetingPointEvents"), {
+        ...meetingPointEvent,
+        at: serverTimestamp(),
+      });
+      await set(ref(db, `meetingRequests/${requestId}`), request);
+
+      setMeetModalOpen(false);
+      setMeetLabel("");
+      lockMeetActions(8000);
+      showMeetToast("Meet request sent", "success");
+
+      try {
+        const response = await fetch("/api/send-meet-push", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            requestId,
+            fromUid: user.uid,
+            fromName: displayName,
+            fromEmoji: emoji,
+            lat,
+            lng,
+            message,
+          }),
         });
-      },
-      (err) => console.error(err)
-    );
-  }, [displayName, emoji, meetLabel, requestNotificationPermission, user]);
+
+        const result = (await response.json().catch(() => null)) as { success?: boolean } | null;
+        if (!response.ok || result?.success !== true) {
+          showMeetToast("Meet sent, but push notification failed", "warning");
+        }
+      } catch (error) {
+        console.warn("Meet push send failed:", error);
+        showMeetToast("Meet sent, but push notification failed", "warning");
+      }
+    } catch (error) {
+      console.error("Failed to send Meet request:", error);
+      showMeetToast("Meet request failed", "error");
+    } finally {
+      setMeetSending(false);
+    }
+  }, [displayName, emoji, isMeetCoolingDown, lockMeetActions, meetLabel, meetSending, showMeetToast, user]);
 
   const handleFocusMeetingPoint = useCallback(() => {
     if (!meetingPoint) return;
@@ -1154,6 +1518,20 @@ export default function Home() {
         </div>
       )}
 
+      {meetAlert && (
+        <MeetRequestOverlay
+          request={meetAlert}
+          onClose={dismissMeetAlert}
+          onFocusMeetingPoint={() => focusMeetRequest(meetAlert)}
+        />
+      )}
+
+      {meetToast && (
+        <div className={meetToast.variant === "success" ? "meet-toast success" : meetToast.variant === "warning" ? "meet-toast warning" : "meet-toast error"}>
+          {meetToast.message}
+        </div>
+      )}
+
       {showOnboarding && (
         <OnboardingOverlay
           step={onboardingStep}
@@ -1168,6 +1546,8 @@ export default function Home() {
           onLabelChange={setMeetLabel}
           onCancel={() => setMeetModalOpen(false)}
           onSetPoint={handleSetMeetingPoint}
+          isSubmitting={meetSending}
+          isCoolingDown={isMeetCoolingDown}
         />
       )}
 
@@ -1188,9 +1568,10 @@ export default function Home() {
           ☰
         </button>
         <button
-          className="meet-top-button mobile-only"
+          className="meet-top-button"
           type="button"
-          onClick={() => setMeetModalOpen(true)}
+          disabled={isMeetCoolingDown}
+          onClick={handleOpenMeetModal}
         >
           📍 MEET
         </button>
@@ -1292,6 +1673,14 @@ export default function Home() {
                 <span>{onlineCount} ONLINE</span>
                 <span>{sharing ? "GPS ACTIVE" : "GPS MUTED"}</span>
               </div>
+              <button
+                className="meet-map-button"
+                type="button"
+                disabled={isMeetCoolingDown}
+                onClick={handleOpenMeetModal}
+              >
+                📍 MEET
+              </button>
             </div>
 
             <div className="zone-card">
@@ -1354,12 +1743,15 @@ export default function Home() {
             installAvailable={Boolean(installPrompt)}
             isIOS={isIOS}
             isInStandaloneMode={isInStandaloneMode}
+            pushStatus={pushStatus}
+            pushBusy={pushBusy}
             onLogout={handleLogout}
             onGpsIntervalChange={handleGpsIntervalChange}
             onNameChange={(name) => setProfileName(name.slice(0, 20))}
             onEmojiChange={handleEmojiChange}
             onSaveProfile={handleSaveProfile}
             onInstall={handleInstall}
+            onEnablePush={registerPushToken}
             onFocusFriend={handleFocusFriend}
             onSendPulse={handleOpenPulseChooser}
             isEmojiLocked={isEmojiLocked}
@@ -1379,6 +1771,8 @@ export default function Home() {
         installAvailable={Boolean(installPrompt)}
         isIOS={isIOS}
         isInStandaloneMode={isInStandaloneMode}
+        pushStatus={pushStatus}
+        pushBusy={pushBusy}
         onClose={() => setMenuOpen(false)}
         onEmojiChange={handleEmojiChange}
         onGpsIntervalChange={handleGpsIntervalChange}
@@ -1386,6 +1780,7 @@ export default function Home() {
         onNameChange={(name) => setProfileName(name.slice(0, 20))}
         onSaveProfile={handleSaveProfile}
         onInstall={handleInstall}
+        onEnablePush={registerPushToken}
         isEmojiLocked={isEmojiLocked}
       />
 
@@ -1518,16 +1913,20 @@ function MeetHereModal({
   onLabelChange,
   onCancel,
   onSetPoint,
+  isSubmitting,
+  isCoolingDown,
 }: {
   label: string;
   onLabelChange: (value: string) => void;
   onCancel: () => void;
   onSetPoint: () => void;
+  isSubmitting: boolean;
+  isCoolingDown: boolean;
 }) {
   return (
     <div className="meet-modal-backdrop" role="presentation">
       <section className="meet-modal" role="dialog" aria-modal="true" aria-labelledby="meet-modal-title">
-        <h2 id="meet-modal-title">SET MEETING POINT</h2>
+        <h2 id="meet-modal-title">SEND MEET REQUEST</h2>
         <input
           value={label}
           onChange={(event) => onLabelChange(event.target.value)}
@@ -1535,15 +1934,49 @@ function MeetHereModal({
           maxLength={30}
           type="text"
         />
-        <p>Sets your current GPS position as the meeting point for everyone</p>
+        <p>Saves the point and notifies your crew with a push alert when possible</p>
         <div className="meet-modal-actions">
           <button className="cancel" type="button" onClick={onCancel}>
             CANCEL
           </button>
-          <button className="set" type="button" onClick={onSetPoint}>
-            SET POINT ⚡
+          <button className="set" type="button" disabled={isSubmitting || isCoolingDown} onClick={onSetPoint}>
+            {isSubmitting ? "SENDING..." : isCoolingDown ? "WAIT" : "SET POINT ⚡"}
           </button>
         </div>
+      </section>
+    </div>
+  );
+}
+
+function MeetRequestOverlay({
+  request,
+  onClose,
+  onFocusMeetingPoint,
+}: {
+  request: MeetAlert;
+  onClose: () => void;
+  onFocusMeetingPoint: () => void;
+}) {
+  const hasCoordinates = Number.isFinite(request.lat) && Number.isFinite(request.lng);
+
+  return (
+    <div className="meet-alert-backdrop" role="dialog" aria-modal="true" aria-labelledby="meet-alert-title">
+      <section className="meet-alert-card">
+        <button className="meet-alert-close" type="button" aria-label="Close meet alert" onClick={onClose}>
+          ×
+        </button>
+        <div className="meet-alert-emoji">{request.fromEmoji}</div>
+        <p className="meet-alert-kicker">MEET REQUEST</p>
+        <h2 id="meet-alert-title">{request.fromName} wants to meet</h2>
+        <p className="meet-alert-message">{request.message}</p>
+        {hasCoordinates && (
+          <button className="meet-alert-focus" type="button" onClick={onFocusMeetingPoint}>
+            Show meeting point
+          </button>
+        )}
+        <button className="meet-alert-dismiss" type="button" onClick={onClose}>
+          Dismiss
+        </button>
       </section>
     </div>
   );
@@ -1672,6 +2105,45 @@ function InstallAppSection({
   );
 }
 
+function PushNotificationsSection({
+  status,
+  isBusy,
+  isIOS,
+  isInStandaloneMode,
+  onEnablePush,
+}: {
+  status: PushStatus;
+  isBusy: boolean;
+  isIOS: boolean;
+  isInStandaloneMode: boolean;
+  onEnablePush: () => void | Promise<void>;
+}) {
+  const statusCopy =
+    status === "enabled"
+      ? "Push notifications enabled"
+      : status === "blocked"
+        ? "Notifications blocked"
+        : status === "ios-home-screen"
+          ? "Install the app to Home Screen to receive notifications on iPhone"
+          : status === "unsupported"
+            ? "Push notifications disabled"
+            : "Push notifications disabled";
+
+  const buttonDisabled = isBusy || status === "unsupported" || (status === "ios-home-screen" && (!isIOS || isInStandaloneMode));
+
+  return (
+    <div className="push-section">
+      <p className="panel-label">PUSH ALERTS</p>
+      <div className={status === "enabled" ? "push-status enabled" : status === "blocked" ? "push-status blocked" : "push-status"}>
+        {statusCopy}
+      </div>
+      <button className="push-enable-button" type="button" disabled={buttonDisabled} onClick={() => void onEnablePush()}>
+        {isBusy ? "ENABLING..." : "ENABLE PUSH NOTIFICATIONS"}
+      </button>
+    </div>
+  );
+}
+
 function CommandCenter({
   currentLocation,
   friends,
@@ -1686,12 +2158,15 @@ function CommandCenter({
   installAvailable,
   isIOS,
   isInStandaloneMode,
+  pushStatus,
+  pushBusy,
   onLogout,
   onGpsIntervalChange,
   onNameChange,
   onEmojiChange,
   onSaveProfile,
   onInstall,
+  onEnablePush,
   onFocusFriend,
   onSendPulse,
   isEmojiLocked,
@@ -1709,12 +2184,15 @@ function CommandCenter({
   installAvailable: boolean;
   isIOS: boolean;
   isInStandaloneMode: boolean;
+  pushStatus: PushStatus;
+  pushBusy: boolean;
   onLogout: () => void;
   onGpsIntervalChange: (interval: GpsInterval) => void;
   onNameChange: (name: string) => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
   onSaveProfile: () => void | Promise<void>;
   onInstall: () => void | Promise<void>;
+  onEnablePush: () => void | Promise<void>;
   onFocusFriend: (friend: FriendLocation) => void;
   onSendPulse: () => void;
   isEmojiLocked: (emoji: string) => boolean;
@@ -1842,6 +2320,16 @@ function CommandCenter({
         />
       </section>
 
+      <section className="panel-block">
+        <PushNotificationsSection
+          status={pushStatus}
+          isBusy={pushBusy}
+          isIOS={isIOS}
+          isInStandaloneMode={isInStandaloneMode}
+          onEnablePush={onEnablePush}
+        />
+      </section>
+
       <button className="logout-button" type="button" onClick={onLogout}>
         LOGOUT
       </button>
@@ -1929,6 +2417,8 @@ function MobileMenu({
   installAvailable,
   isIOS,
   isInStandaloneMode,
+  pushStatus,
+  pushBusy,
   onClose,
   onEmojiChange,
   onGpsIntervalChange,
@@ -1936,6 +2426,7 @@ function MobileMenu({
   onNameChange,
   onSaveProfile,
   onInstall,
+  onEnablePush,
   isEmojiLocked,
 }: {
   open: boolean;
@@ -1949,6 +2440,8 @@ function MobileMenu({
   installAvailable: boolean;
   isIOS: boolean;
   isInStandaloneMode: boolean;
+  pushStatus: PushStatus;
+  pushBusy: boolean;
   onClose: () => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
   onGpsIntervalChange: (interval: GpsInterval) => void;
@@ -1956,6 +2449,7 @@ function MobileMenu({
   onNameChange: (name: string) => void;
   onSaveProfile: () => void | Promise<void>;
   onInstall: () => void | Promise<void>;
+  onEnablePush: () => void | Promise<void>;
   isEmojiLocked: (emoji: string) => boolean;
 }) {
   const [view, setView] = useState<"menu" | "profile" | "settings">("menu");
@@ -2070,6 +2564,13 @@ function MobileMenu({
             isIOS={isIOS}
             isInStandaloneMode={isInStandaloneMode}
             onInstall={onInstall}
+          />
+          <PushNotificationsSection
+            status={pushStatus}
+            isBusy={pushBusy}
+            isIOS={isIOS}
+            isInStandaloneMode={isInStandaloneMode}
+            onEnablePush={onEnablePush}
           />
         </section>
       )}
