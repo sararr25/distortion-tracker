@@ -224,6 +224,28 @@ function getCurrentPositionAsync(options?: PositionOptions) {
   });
 }
 
+function getErrorCode(error: unknown) {
+  if (!error || typeof error !== "object" || !("code" in error)) return "";
+  return String((error as { code?: unknown }).code ?? "");
+}
+
+function getErrorMessage(error: unknown) {
+  if (!error || typeof error !== "object" || !("message" in error)) return "";
+  return String((error as { message?: unknown }).message ?? "");
+}
+
+function isPermissionDeniedError(error: unknown) {
+  const code = getErrorCode(error).toLowerCase();
+  const message = getErrorMessage(error).toLowerCase();
+  return code.includes("permission_denied") || code.includes("permission-denied") || message.includes("permission denied");
+}
+
+function isGeolocationPermissionDenied(error: unknown) {
+  const code = getErrorCode(error);
+  const message = getErrorMessage(error).toLowerCase();
+  return code === "1" || message.includes("user denied geolocation") || message.includes("permission denied");
+}
+
 function makeMeetRequestId(uid: string) {
   return `${uid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -751,6 +773,10 @@ export default function Home() {
       name: displayName,
       emoji: nextEmoji,
       updatedAt: serverTimestamp(),
+    }).catch((error) => {
+      if (!isPermissionDeniedError(error)) {
+        console.error("Failed to update profile emoji:", error);
+      }
     });
 
     const previousKey = emojiKey(previousEmoji);
@@ -952,6 +978,10 @@ export default function Home() {
       name: displayName,
       emoji,
       updatedAt: serverTimestamp(),
+    }).catch((error) => {
+      if (!isPermissionDeniedError(error)) {
+        console.error("Failed to sync profile:", error);
+      }
     });
   }, [displayName, emoji, profileHydratedUid, user]);
 
@@ -974,7 +1004,11 @@ export default function Home() {
             lastSeen: serverTimestamp(),
           })
         )
-        .catch(console.error);
+        .catch((error) => {
+          if (!isPermissionDeniedError(error)) {
+            console.error(error);
+          }
+        });
     });
 
     return () => {
@@ -982,6 +1016,10 @@ export default function Home() {
       void update(profileRef, {
         online: false,
         lastSeen: serverTimestamp(),
+      }).catch((error) => {
+        if (!isPermissionDeniedError(error)) {
+          console.error("Failed to set offline profile state:", error);
+        }
       });
     };
   }, [profileHydratedUid, user]);
@@ -1282,9 +1320,24 @@ export default function Home() {
 
     try {
       setMeetSending(true);
-      const position = await getCurrentPositionAsync({ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
-      const lat = position.coords.latitude;
-      const lng = position.coords.longitude;
+      let lat: number;
+      let lng: number;
+
+      try {
+        const precisePosition = await getCurrentPositionAsync({ enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+        lat = precisePosition.coords.latitude;
+        lng = precisePosition.coords.longitude;
+      } catch (geoError) {
+        const fallbackLocation = user ? locations[user.uid] : undefined;
+        if (fallbackLocation && isFreshLocation(fallbackLocation, Date.now())) {
+          lat = fallbackLocation.lat;
+          lng = fallbackLocation.lng;
+          showMeetToast("GPS denied, using last known position", "warning");
+        } else {
+          throw geoError;
+        }
+      }
+
       const message = `${displayName} wants to meet`;
       const createdAt = Date.now();
       const expiresAt = createdAt + 10 * 60 * 1000;
@@ -1312,21 +1365,31 @@ export default function Home() {
         setAt: createdAt,
       };
 
-      await set(ref(db, "meetingPoint"), meetingPointEvent);
-      await push(ref(db, "meetingPointEvents"), {
-        ...meetingPointEvent,
-        at: serverTimestamp(),
-      });
-      await set(ref(db, `meetingRequests/${requestId}`), {
-        ...request,
-        createdAtServer: serverTimestamp(),
-      });
+      let requestSavedToDatabase = true;
+      try {
+        await set(ref(db, "meetingPoint"), meetingPointEvent);
+        await push(ref(db, "meetingPointEvents"), {
+          ...meetingPointEvent,
+          at: serverTimestamp(),
+        });
+        await set(ref(db, `meetingRequests/${requestId}`), {
+          ...request,
+          createdAtServer: serverTimestamp(),
+        });
+      } catch (dbError) {
+        requestSavedToDatabase = false;
+        if (!isPermissionDeniedError(dbError)) {
+          throw dbError;
+        }
+        console.warn("Meet database write blocked by rules:", dbError);
+      }
 
       setMeetModalOpen(false);
       setMeetLabel("");
       lockMeetActions(8000);
-      showMeetToast("Meet request sent", "success");
+      showMeetToast(requestSavedToDatabase ? "Meet request sent" : "Meet sent with limited mode", requestSavedToDatabase ? "success" : "warning");
 
+      let pushSent = false;
       try {
         const response = await fetch("/api/send-meet-push", {
           method: "POST",
@@ -1343,20 +1406,31 @@ export default function Home() {
         });
 
         const result = (await response.json().catch(() => null)) as { success?: boolean } | null;
-        if (!response.ok || result?.success !== true) {
+        pushSent = response.ok && result?.success === true;
+        if (!pushSent) {
           showMeetToast("Meet sent, but push notification failed", "warning");
         }
       } catch (error) {
         console.warn("Meet push send failed:", error);
         showMeetToast("Meet sent, but push notification failed", "warning");
       }
+
+      if (!requestSavedToDatabase && !pushSent) {
+        throw new Error("Meet request failed: database blocked and push failed");
+      }
     } catch (error) {
       console.error("Failed to send Meet request:", error);
-      showMeetToast("Meet request failed", "error");
+      if (isGeolocationPermissionDenied(error)) {
+        showMeetToast("Location permission denied for Meet", "error");
+      } else if (isPermissionDeniedError(error)) {
+        showMeetToast("Firebase permissions blocked Meet", "error");
+      } else {
+        showMeetToast("Meet request failed", "error");
+      }
     } finally {
       setMeetSending(false);
     }
-  }, [displayName, emoji, isMeetCoolingDown, lockMeetActions, meetLabel, meetSending, showMeetToast, user]);
+  }, [displayName, emoji, isMeetCoolingDown, lockMeetActions, locations, meetLabel, meetSending, showMeetToast, user]);
 
   const handleFocusMeetingPoint = useCallback(() => {
     if (!meetingPoint) return;
@@ -1406,7 +1480,11 @@ export default function Home() {
       await update(ref(db, `profiles/${user.uid}`), {
         online: false,
         lastSeen: serverTimestamp(),
-      }).catch(console.error);
+      }).catch((error) => {
+        if (!isPermissionDeniedError(error)) {
+          console.error(error);
+        }
+      });
     }
     await signOut(auth);
   }
@@ -1427,6 +1505,10 @@ export default function Home() {
         name: savedName,
         emoji,
         updatedAt: serverTimestamp(),
+      }).catch((error) => {
+        if (!isPermissionDeniedError(error)) {
+          throw error;
+        }
       });
 
       setProfileName(savedName);
