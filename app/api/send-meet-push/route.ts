@@ -94,6 +94,17 @@ export async function POST(request: NextRequest) {
   const tokens = Array.from(uniqueTokens.keys());
   const meetPath = `/?meetRequestId=${encodeURIComponent(payload.requestId)}`;
   const meetUrl = `${request.nextUrl.origin}${meetPath}`;
+  const meetData = {
+    type: "meet",
+    requestId: payload.requestId,
+    fromUid: payload.fromUid,
+    fromName: payload.fromName,
+    fromEmoji: payload.fromEmoji,
+    lat: String(payload.lat),
+    lng: String(payload.lng),
+    message: payload.message,
+    url: meetPath,
+  };
 
   if (tokens.length === 0) {
     return NextResponse.json({ success: true, sentCount: 0, failedCount: 0 });
@@ -105,16 +116,7 @@ export async function POST(request: NextRequest) {
       title: `Meet request from ${payload.fromName} ${payload.fromEmoji}`,
       body: "Tap to open the Distortion map",
     },
-    data: {
-      type: "meet",
-      requestId: payload.requestId,
-      fromUid: payload.fromUid,
-      fromName: payload.fromName,
-      fromEmoji: payload.fromEmoji,
-      lat: String(payload.lat),
-      lng: String(payload.lng),
-      url: meetPath,
-    },
+    data: meetData,
     webpush: {
       headers: {
         Urgency: "high",
@@ -127,6 +129,7 @@ export async function POST(request: NextRequest) {
         badge: "/icon-192.png",
         vibrate: [200, 100, 200, 100, 400],
         requireInteraction: true,
+        data: meetData,
       },
     },
   });

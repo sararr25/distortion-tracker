@@ -710,6 +710,24 @@ export default function Home() {
     }
   }, [displayName, emoji, meetResponseSending, showMeetToast, user]);
 
+  const openMeetRequestById = useCallback(async (requestId: string) => {
+    if (!requestId) return;
+
+    try {
+      const snapshot = await get(ref(db, `meetingRequests/${requestId}`));
+      const request = snapshot.exists() ? snapshot.val() as MeetRequest : null;
+      if (!request || request.type !== "meet" || (request.expiresAt && request.expiresAt < Date.now())) {
+        showMeetToast("Meet request expired", "warning");
+        return;
+      }
+
+      openMeetRequestForCurrentUser(request, "push");
+    } catch (error) {
+      console.error("Failed to open Meet request:", error);
+      showMeetToast("Meet request unavailable", "warning");
+    }
+  }, [openMeetRequestForCurrentUser, showMeetToast]);
+
   useLocation(Boolean(user && sharing), emoji, gpsInterval, displayName, handleUpdate);
 
   useEffect(() => {
@@ -728,26 +746,8 @@ export default function Home() {
     };
 
     const loadMeetRequest = async () => {
-      try {
-        const snapshot = await get(ref(db, `meetingRequests/${requestId}`));
-        if (cancelled) return;
-
-        const request = snapshot.exists() ? snapshot.val() as MeetRequest : null;
-        if (!request || request.type !== "meet" || (request.expiresAt && request.expiresAt < Date.now())) {
-          showMeetToast("Meet request expired", "warning");
-          cleanMeetRequestUrl();
-          return;
-        }
-
-        openMeetRequestForCurrentUser(request, "push");
-        cleanMeetRequestUrl();
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to open Meet request from URL:", error);
-          showMeetToast("Meet request unavailable", "warning");
-          cleanMeetRequestUrl();
-        }
-      }
+      await openMeetRequestById(requestId);
+      if (!cancelled) cleanMeetRequestUrl();
     };
 
     void loadMeetRequest();
@@ -755,7 +755,23 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [openMeetRequestForCurrentUser, profileHydratedUid, showMeetToast, user]);
+  }, [openMeetRequestById, profileHydratedUid, user]);
+
+  useEffect(() => {
+    if (!user || profileHydratedUid !== user.uid) return;
+
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; requestId?: unknown } | null;
+      if (!data || data.type !== "open-meet-request" || typeof data.requestId !== "string") return;
+      void openMeetRequestById(data.requestId);
+    };
+
+    navigator.serviceWorker?.addEventListener("message", handleServiceWorkerMessage);
+
+    return () => {
+      navigator.serviceWorker?.removeEventListener("message", handleServiceWorkerMessage);
+    };
+  }, [openMeetRequestById, profileHydratedUid, user]);
 
   useEffect(() => {
     if (!user) return;

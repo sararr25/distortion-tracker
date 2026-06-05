@@ -14,15 +14,37 @@ function resolveTargetUrl(targetUrl) {
   }
 }
 
-function focusOrOpenTarget(targetUrl) {
+function getNotificationData(notification) {
+  const rawData = notification?.data || {};
+  const fcmData = rawData.FCM_MSG?.data || {};
+  return { ...fcmData, ...rawData };
+}
+
+function getNotificationTargetUrl(data) {
+  if (data?.url) return data.url;
+  if (data?.requestId) return `/?meetRequestId=${encodeURIComponent(data.requestId)}`;
+  return "/";
+}
+
+function postMeetRequestToClient(client, data) {
+  if (!client || !data?.requestId) return;
+  client.postMessage({
+    type: "open-meet-request",
+    requestId: data.requestId,
+  });
+}
+
+function focusOrOpenTarget(targetUrl, data) {
   const resolvedUrl = resolveTargetUrl(targetUrl);
 
   return self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
     for (const client of clients) {
       if ("navigate" in client) {
         return client.navigate(resolvedUrl).then((navigatedClient) => {
-          if (navigatedClient && "focus" in navigatedClient) {
-            return navigatedClient.focus();
+          const targetClient = navigatedClient || client;
+          postMeetRequestToClient(targetClient, data);
+          if (targetClient && "focus" in targetClient) {
+            return targetClient.focus();
           }
           if ("focus" in client) {
             return client.focus();
@@ -32,12 +54,16 @@ function focusOrOpenTarget(targetUrl) {
       }
 
       if ("focus" in client) {
+        postMeetRequestToClient(client, data);
         return client.focus();
       }
     }
 
     if (self.clients.openWindow) {
-      return self.clients.openWindow(resolvedUrl);
+      return self.clients.openWindow(resolvedUrl).then((client) => {
+        postMeetRequestToClient(client, data);
+        return client;
+      });
     }
     return undefined;
   });
@@ -46,7 +72,8 @@ function focusOrOpenTarget(targetUrl) {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetUrl = event.notification.data?.url || "/";
+  const data = getNotificationData(event.notification);
+  const targetUrl = getNotificationTargetUrl(data);
 
-  event.waitUntil(focusOrOpenTarget(targetUrl));
+  event.waitUntil(focusOrOpenTarget(targetUrl, data));
 });
