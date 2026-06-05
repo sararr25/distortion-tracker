@@ -20,20 +20,16 @@ export function useLocation(
   onSelfUpdate?: (location: FriendLocation) => void
 ) {
   useEffect(() => {
-    if (!enabled) {
-      onUpdate({});
-      return;
-    }
-
     const locRef = ref(db, "locations");
     onValue(locRef, (snapshot) => {
-      onUpdate(snapshot.val() ?? {});
+      const data = snapshot.val();
+      if (data) onUpdate(data);
     });
 
     return () => {
       off(locRef);
     };
-  }, [enabled, onUpdate]);
+  }, []);
 
   useEffect(() => {
     if (!enabled || !sharing || !("geolocation" in navigator)) return;
