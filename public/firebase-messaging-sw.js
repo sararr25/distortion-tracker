@@ -20,24 +20,48 @@ async function initMessaging() {
   return messaging;
 }
 
+function resolveTargetUrl(targetUrl) {
+  try {
+    return new URL(targetUrl || "/", self.location.origin).href;
+  } catch {
+    return new URL("/", self.location.origin).href;
+  }
+}
+
+function focusOrOpenTarget(targetUrl) {
+  const resolvedUrl = resolveTargetUrl(targetUrl);
+
+  return self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+    for (const client of clients) {
+      if ("navigate" in client) {
+        return client.navigate(resolvedUrl).then((navigatedClient) => {
+          if (navigatedClient && "focus" in navigatedClient) {
+            return navigatedClient.focus();
+          }
+          if ("focus" in client) {
+            return client.focus();
+          }
+          return undefined;
+        });
+      }
+
+      if ("focus" in client) {
+        return client.focus();
+      }
+    }
+
+    if (self.clients.openWindow) {
+      return self.clients.openWindow(resolvedUrl);
+    }
+    return undefined;
+  });
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const targetUrl = event.notification.data?.url || "/";
 
-  event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
-        if ("focus" in client) {
-          return client.focus();
-        }
-      }
-
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(targetUrl);
-      }
-      return undefined;
-    })
-  );
+  event.waitUntil(focusOrOpenTarget(targetUrl));
 });
 
 void initMessaging()
@@ -61,7 +85,7 @@ void initMessaging()
           fromEmoji: data.fromEmoji,
           lat: data.lat,
           lng: data.lng,
-          url: data.url || "/",
+          url: data.url || (data.requestId ? `/?meetRequestId=${encodeURIComponent(data.requestId)}` : "/"),
         },
       };
 

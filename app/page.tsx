@@ -96,6 +96,23 @@ type MeetingPointEvent = MeetingPoint & {
   fromEmoji?: string;
 };
 
+const MEET_RESPONSE_LABELS = {
+  coming: "I’m coming 🏃‍♀️",
+  notComing: "Can’t, rave responsibly 🫡",
+} as const;
+
+type MeetResponseStatus = keyof typeof MEET_RESPONSE_LABELS;
+type RsvpStatus = MeetResponseStatus | "pending";
+
+type MeetResponse = {
+  uid: string;
+  name: string;
+  emoji: string;
+  status: MeetResponseStatus;
+  label: string;
+  updatedAt: number;
+};
+
 type MeetRequest = {
   id: string;
   type: "meet";
@@ -107,6 +124,22 @@ type MeetRequest = {
   message: string;
   createdAt: number;
   expiresAt: number;
+  responses?: Record<string, MeetResponse | undefined>;
+};
+
+type MeetStatusPerson = {
+  uid: string;
+  name: string;
+  emoji: string;
+  status: RsvpStatus;
+  label: string;
+  updatedAt: number;
+};
+
+type MeetStatusGroups = {
+  coming: MeetStatusPerson[];
+  notComing: MeetStatusPerson[];
+  pending: MeetStatusPerson[];
 };
 
 type PushStatus =
@@ -250,6 +283,77 @@ function makeMeetRequestId(uid: string) {
   return `${uid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function isMeetResponseStatus(value: unknown): value is MeetResponseStatus {
+  return value === "coming" || value === "notComing";
+}
+
+function getFirstName(name: string) {
+  return name.trim().split(" ").filter(Boolean)[0] || "Someone";
+}
+
+function formatMeetRsvpTime(updatedAt: number, now: number) {
+  if (!updatedAt) return "Still deciding";
+
+  const diffMs = Math.max(0, now - updatedAt);
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin} min ago`;
+
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  return "earlier";
+}
+
+function buildMeetStatusGroups(request: MeetRequest | null, friends: [string, FriendSignal][]): MeetStatusGroups {
+  const groups: MeetStatusGroups = {
+    coming: [],
+    notComing: [],
+    pending: [],
+  };
+
+  if (!request) return groups;
+
+  const friendMap = new globalThis.Map(friends);
+  const answeredUids = new Set<string>();
+  const responses = request.responses ?? {};
+
+  for (const [uid, response] of Object.entries(responses)) {
+    if (uid === request.fromUid || !response || !isMeetResponseStatus(response.status)) continue;
+
+    answeredUids.add(uid);
+    const friend = friendMap.get(uid);
+    const person: MeetStatusPerson = {
+      uid,
+      name: response.name?.trim() || friend?.name || "Anonymous",
+      emoji: response.emoji || friend?.emoji || "🔥",
+      status: response.status,
+      label: response.label || MEET_RESPONSE_LABELS[response.status],
+      updatedAt: normalizeTimestamp(response.updatedAt),
+    };
+
+    groups[response.status].push(person);
+  }
+
+  for (const [uid, friend] of friends) {
+    if (uid === request.fromUid || answeredUids.has(uid)) continue;
+    groups.pending.push({
+      uid,
+      name: friend.name,
+      emoji: friend.emoji,
+      status: "pending",
+      label: "Still deciding",
+      updatedAt: 0,
+    });
+  }
+
+  groups.coming.sort((a, b) => b.updatedAt - a.updatedAt);
+  groups.notComing.sort((a, b) => b.updatedAt - a.updatedAt);
+  groups.pending.sort((a, b) => a.name.localeCompare(b.name));
+
+  return groups;
+}
+
 export default function Home() {
   const { user, loading } = useAuth();
   const isFirstLoad = useRef(true);
@@ -257,6 +361,7 @@ export default function Home() {
   const meetAlertTimeoutRef = useRef<number | null>(null);
   const meetToastTimeoutRef = useRef<number | null>(null);
   const meetCooldownTimeoutRef = useRef<number | null>(null);
+  const meetResponseFeedbackTimeoutRef = useRef<number | null>(null);
   const huntTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const huntNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const titleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -302,6 +407,11 @@ export default function Home() {
   const [meetToast, setMeetToast] = useState<MeetToast | null>(null);
   const [meetCooldownUntil, setMeetCooldownUntil] = useState(0);
   const [meetSending, setMeetSending] = useState(false);
+  const [meetResponseSending, setMeetResponseSending] = useState<MeetResponseStatus | null>(null);
+  const [meetResponseFeedback, setMeetResponseFeedback] = useState("");
+  const [meetStatusRequestId, setMeetStatusRequestId] = useState<string | null>(null);
+  const [meetStatusRequest, setMeetStatusRequest] = useState<MeetRequest | null>(null);
+  const [meetStatusOpen, setMeetStatusOpen] = useState(false);
   const [pushStatus, setPushStatus] = useState<PushStatus>("loading");
   const [pushBusy, setPushBusy] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -330,7 +440,7 @@ export default function Home() {
     flyToRef.current = flyTo;
   }, []);
 
-  const isMeetCoolingDown = meetCooldownUntil > Date.now();
+  const isMeetCoolingDown = meetCooldownUntil > now;
 
   const showMeetToast = useCallback((message: string, variant: MeetToast["variant"]) => {
     setMeetToast({ message, variant });
@@ -356,9 +466,15 @@ export default function Home() {
 
   const dismissMeetAlert = useCallback(() => {
     setMeetAlert(null);
+    setMeetResponseFeedback("");
+    setMeetResponseSending(null);
     if (meetAlertTimeoutRef.current) {
       window.clearTimeout(meetAlertTimeoutRef.current);
       meetAlertTimeoutRef.current = null;
+    }
+    if (meetResponseFeedbackTimeoutRef.current) {
+      window.clearTimeout(meetResponseFeedbackTimeoutRef.current);
+      meetResponseFeedbackTimeoutRef.current = null;
     }
   }, []);
 
@@ -369,8 +485,7 @@ export default function Home() {
       flyToRef.current?.(lat, lng);
       setFocusedLocation({ lat, lng, focusId: Date.now() });
     }
-    dismissMeetAlert();
-  }, [dismissMeetAlert]);
+  }, []);
 
   const playAlertSound = useCallback(() => {
     if (!audioUnlockedRef.current) return;
@@ -447,14 +562,13 @@ export default function Home() {
       titleTimeoutRef.current = null;
     }, 10000);
 
+    setMeetResponseFeedback("");
+    setMeetResponseSending(null);
     setMeetAlert({ ...request, source });
     if (meetAlertTimeoutRef.current) {
       window.clearTimeout(meetAlertTimeoutRef.current);
-    }
-    meetAlertTimeoutRef.current = window.setTimeout(() => {
-      setMeetAlert(null);
       meetAlertTimeoutRef.current = null;
-    }, 10000);
+    }
   }, [playAlertSound]);
 
   const registerPushToken = useCallback(async () => {
@@ -505,7 +619,143 @@ export default function Home() {
     (((window.navigator as Navigator & { standalone?: boolean }).standalone === true) ||
       window.matchMedia("(display-mode: standalone)").matches);
 
+  const openMeetRequestForCurrentUser = useCallback((request: MeetRequest, source: "realtime" | "push") => {
+    if (!user) return;
+    if (!request.id || request.type !== "meet") return;
+    if (request.expiresAt && request.expiresAt < Date.now()) {
+      showMeetToast("Meet request expired", "warning");
+      return;
+    }
+
+    shownMeetRequestIdsRef.current.add(request.id);
+
+    if (request.fromUid === user.uid) {
+      setMeetStatusRequestId(request.id);
+      setMeetStatusRequest(request);
+      setMeetStatusOpen(true);
+      return;
+    }
+
+    setMeetResponseFeedback("");
+    setMeetResponseSending(null);
+    setMeetAlert({ ...request, source });
+    if (meetAlertTimeoutRef.current) {
+      window.clearTimeout(meetAlertTimeoutRef.current);
+      meetAlertTimeoutRef.current = null;
+    }
+  }, [showMeetToast, user]);
+
+  const handleMeetResponse = useCallback(async (request: MeetRequest, status: MeetResponseStatus) => {
+    if (!user || meetResponseSending) return;
+
+    const previousStatus = request.responses?.[user.uid]?.status;
+    const label = MEET_RESPONSE_LABELS[status];
+    const response = {
+      uid: user.uid,
+      name: displayName,
+      emoji,
+      status,
+      label,
+      updatedAt: serverTimestamp(),
+    };
+
+    setMeetResponseSending(status);
+    setMeetResponseFeedback("");
+
+    try {
+      await set(ref(db, `meetingRequests/${request.id}/responses/${user.uid}`), response);
+
+      const localResponse: MeetResponse = {
+        uid: user.uid,
+        name: displayName,
+        emoji,
+        status,
+        label,
+        updatedAt: Date.now(),
+      };
+
+      setMeetAlert((current) => {
+        if (!current || current.id !== request.id) return current;
+        return {
+          ...current,
+          responses: {
+            ...(current.responses ?? {}),
+            [user.uid]: localResponse,
+          },
+        };
+      });
+
+      setMeetResponseFeedback(isMeetResponseStatus(previousStatus) ? "Response updated" : "Response sent");
+      if (meetResponseFeedbackTimeoutRef.current) {
+        window.clearTimeout(meetResponseFeedbackTimeoutRef.current);
+      }
+      meetResponseFeedbackTimeoutRef.current = window.setTimeout(() => {
+        setMeetResponseFeedback("");
+        meetResponseFeedbackTimeoutRef.current = null;
+      }, 1500);
+
+      if (meetAlertTimeoutRef.current) {
+        window.clearTimeout(meetAlertTimeoutRef.current);
+      }
+      meetAlertTimeoutRef.current = window.setTimeout(() => {
+        setMeetAlert((current) => current?.id === request.id ? null : current);
+        setMeetResponseFeedback("");
+        meetAlertTimeoutRef.current = null;
+      }, 1500);
+    } catch (error) {
+      console.error("Failed to send Meet RSVP:", error);
+      showMeetToast(isPermissionDeniedError(error) ? "Firebase permissions blocked RSVP" : "Response failed", "error");
+    } finally {
+      setMeetResponseSending(null);
+    }
+  }, [displayName, emoji, meetResponseSending, showMeetToast, user]);
+
   useLocation(Boolean(user && sharing), emoji, gpsInterval, displayName, handleUpdate);
+
+  useEffect(() => {
+    if (!user || profileHydratedUid !== user.uid) return;
+
+    const url = new URL(window.location.href);
+    const requestId = url.searchParams.get("meetRequestId");
+    if (!requestId) return;
+
+    let cancelled = false;
+    const cleanMeetRequestUrl = () => {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete("meetRequestId");
+      const nextPath = `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+      window.history.replaceState(window.history.state, "", nextPath || "/");
+    };
+
+    const loadMeetRequest = async () => {
+      try {
+        const snapshot = await get(ref(db, `meetingRequests/${requestId}`));
+        if (cancelled) return;
+
+        const request = snapshot.exists() ? snapshot.val() as MeetRequest : null;
+        if (!request || request.type !== "meet" || (request.expiresAt && request.expiresAt < Date.now())) {
+          showMeetToast("Meet request expired", "warning");
+          cleanMeetRequestUrl();
+          return;
+        }
+
+        openMeetRequestForCurrentUser(request, "push");
+        cleanMeetRequestUrl();
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to open Meet request from URL:", error);
+          showMeetToast("Meet request unavailable", "warning");
+          cleanMeetRequestUrl();
+        }
+      }
+    };
+
+    void loadMeetRequest();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [openMeetRequestForCurrentUser, profileHydratedUid, showMeetToast, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -713,6 +963,26 @@ export default function Home() {
       unsub();
     };
   }, [triggerMeetRequestAlert, user]);
+
+  useEffect(() => {
+    if (!user || !meetStatusRequestId) return;
+
+    const requestRef = ref(db, `meetingRequests/${meetStatusRequestId}`);
+    const unsubscribe = onValue(requestRef, (snapshot) => {
+      const request = snapshot.val() as MeetRequest | null;
+      if (!request || request.type !== "meet") {
+        setMeetStatusRequest(null);
+        setMeetStatusOpen(false);
+        return;
+      }
+
+      setMeetStatusRequest(request);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [meetStatusRequestId, user]);
 
   useEffect(() => {
     const isDismissed = window.localStorage.getItem("pwa_banner_dismissed") === "true";
@@ -932,6 +1202,9 @@ export default function Home() {
       }
       if (meetCooldownTimeoutRef.current) {
         clearTimeout(meetCooldownTimeoutRef.current);
+      }
+      if (meetResponseFeedbackTimeoutRef.current) {
+        clearTimeout(meetResponseFeedbackTimeoutRef.current);
       }
     };
   }, []);
@@ -1221,6 +1494,11 @@ export default function Home() {
       });
   }, [effectiveLocations, liveEntries, now, profiles, user?.uid]);
 
+  const meetStatusGroups = useMemo(
+    () => buildMeetStatusGroups(meetStatusRequest, friends),
+    [friends, meetStatusRequest]
+  );
+
   const currentLocation = user ? effectiveLocations[user.uid] : undefined;
   const currentStage = sharing && currentLocation ? getNearestStage(currentLocation.lat, currentLocation.lng) : "";
   const onlineCount = friends.length + 1;
@@ -1353,6 +1631,7 @@ export default function Home() {
         message,
         createdAt,
         expiresAt,
+        responses: {},
       };
 
       const meetingPointEvent: MeetingPointEvent = {
@@ -1376,6 +1655,9 @@ export default function Home() {
           ...request,
           createdAtServer: serverTimestamp(),
         });
+        setMeetStatusRequestId(requestId);
+        setMeetStatusRequest(request);
+        setMeetStatusOpen(true);
       } catch (dbError) {
         requestSavedToDatabase = false;
         if (!isPermissionDeniedError(dbError)) {
@@ -1476,6 +1758,10 @@ export default function Home() {
     setMenuOpen(false);
     setPanelOpen(false);
     setSharing(false);
+    setMeetAlert(null);
+    setMeetStatusOpen(false);
+    setMeetStatusRequest(null);
+    setMeetStatusRequestId(null);
     if (user) {
       await update(ref(db, `profiles/${user.uid}`), {
         online: false,
@@ -1608,8 +1894,28 @@ export default function Home() {
       {meetAlert && (
         <MeetRequestOverlay
           request={meetAlert}
+          currentUid={user.uid}
+          responseFeedback={meetResponseFeedback}
+          submittingStatus={meetResponseSending}
           onClose={dismissMeetAlert}
           onFocusMeetingPoint={() => focusMeetRequest(meetAlert)}
+          onRespond={(status) => void handleMeetResponse(meetAlert, status)}
+        />
+      )}
+
+      {meetStatusRequest && !meetStatusOpen && (
+        <button className="meet-status-fab" type="button" onClick={() => setMeetStatusOpen(true)}>
+          MEET STATUS
+        </button>
+      )}
+
+      {meetStatusRequest && meetStatusOpen && (
+        <MeetStatusPanel
+          groups={meetStatusGroups}
+          now={now}
+          request={meetStatusRequest}
+          onClose={() => setMeetStatusOpen(false)}
+          onFocusMeetingPoint={() => focusMeetRequest(meetStatusRequest)}
         />
       )}
 
@@ -2037,14 +2343,25 @@ function MeetHereModal({
 
 function MeetRequestOverlay({
   request,
+  currentUid,
+  responseFeedback,
+  submittingStatus,
   onClose,
   onFocusMeetingPoint,
+  onRespond,
 }: {
   request: MeetAlert;
+  currentUid: string;
+  responseFeedback: string;
+  submittingStatus: MeetResponseStatus | null;
   onClose: () => void;
   onFocusMeetingPoint: () => void;
+  onRespond: (status: MeetResponseStatus) => void;
 }) {
   const hasCoordinates = Number.isFinite(request.lat) && Number.isFinite(request.lng);
+  const currentResponse = request.responses?.[currentUid];
+  const currentStatus = isMeetResponseStatus(currentResponse?.status) ? currentResponse.status : null;
+  const currentLabel = currentStatus ? currentResponse?.label || MEET_RESPONSE_LABELS[currentStatus] : "";
 
   return (
     <div className="meet-alert-backdrop" role="dialog" aria-modal="true" aria-labelledby="meet-alert-title">
@@ -2056,15 +2373,102 @@ function MeetRequestOverlay({
         <p className="meet-alert-kicker">MEET REQUEST</p>
         <h2 id="meet-alert-title">{request.fromName} wants to meet</h2>
         <p className="meet-alert-message">{request.message}</p>
+        {currentLabel && (
+          <p className="meet-alert-current">
+            Current response <strong>{currentLabel}</strong>
+          </p>
+        )}
+        <div className="meet-alert-rsvp-actions">
+          <button
+            className="meet-alert-rsvp coming"
+            type="button"
+            aria-pressed={currentStatus === "coming"}
+            disabled={submittingStatus !== null}
+            onClick={() => onRespond("coming")}
+          >
+            {MEET_RESPONSE_LABELS.coming}
+          </button>
+          <button
+            className="meet-alert-rsvp not-coming"
+            type="button"
+            aria-pressed={currentStatus === "notComing"}
+            disabled={submittingStatus !== null}
+            onClick={() => onRespond("notComing")}
+          >
+            {MEET_RESPONSE_LABELS.notComing}
+          </button>
+        </div>
+        {responseFeedback && <p className="meet-alert-feedback">{responseFeedback}</p>}
         {hasCoordinates && (
           <button className="meet-alert-focus" type="button" onClick={onFocusMeetingPoint}>
             Show meeting point
           </button>
         )}
-        <button className="meet-alert-dismiss" type="button" onClick={onClose}>
-          Dismiss
-        </button>
       </section>
+    </div>
+  );
+}
+
+function MeetStatusPanel({
+  request,
+  groups,
+  now,
+  onClose,
+  onFocusMeetingPoint,
+}: {
+  request: MeetRequest;
+  groups: MeetStatusGroups;
+  now: number;
+  onClose: () => void;
+  onFocusMeetingPoint: () => void;
+}) {
+  return (
+    <section className="meet-status-panel" role="dialog" aria-modal="false" aria-labelledby="meet-status-title">
+      <div className="meet-status-header">
+        <div>
+          <p>LIVE RSVP</p>
+          <h2 id="meet-status-title">MEET STATUS</h2>
+        </div>
+        <button type="button" aria-label="Close meet status" onClick={onClose}>
+          ×
+        </button>
+      </div>
+      <button className="meet-status-point" type="button" onClick={onFocusMeetingPoint}>
+        📍 {request.message}
+      </button>
+      <MeetStatusSection title="COMING" people={groups.coming} now={now} />
+      <MeetStatusSection title="CAN’T MAKE IT" people={groups.notComing} now={now} />
+      <MeetStatusSection title="PENDING" people={groups.pending} now={now} />
+    </section>
+  );
+}
+
+function MeetStatusSection({
+  title,
+  people,
+  now,
+}: {
+  title: string;
+  people: MeetStatusPerson[];
+  now: number;
+}) {
+  return (
+    <div className="meet-status-section">
+      <h3>{title}</h3>
+      {people.length === 0 ? (
+        <p className="meet-status-empty">No one yet</p>
+      ) : (
+        <div className="meet-status-list">
+          {people.map((person) => (
+            <div className="meet-status-row" key={person.uid}>
+              <span>{person.emoji}</span>
+              <strong>{getFirstName(person.name)}</strong>
+              <small>{person.label}</small>
+              <time>{formatMeetRsvpTime(person.updatedAt, now)}</time>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

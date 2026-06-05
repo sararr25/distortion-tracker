@@ -92,6 +92,8 @@ export async function POST(request: NextRequest) {
 
   const messaging = getMessaging();
   const tokens = Array.from(uniqueTokens.keys());
+  const meetPath = `/?meetRequestId=${encodeURIComponent(payload.requestId)}`;
+  const meetUrl = `${request.nextUrl.origin}${meetPath}`;
 
   if (tokens.length === 0) {
     return NextResponse.json({ success: true, sentCount: 0, failedCount: 0 });
@@ -111,11 +113,14 @@ export async function POST(request: NextRequest) {
       fromEmoji: payload.fromEmoji,
       lat: String(payload.lat),
       lng: String(payload.lng),
-      url: "/",
+      url: meetPath,
     },
     webpush: {
       headers: {
         Urgency: "high",
+      },
+      fcmOptions: {
+        link: meetUrl,
       },
       notification: {
         icon: "/icon-192.png",
