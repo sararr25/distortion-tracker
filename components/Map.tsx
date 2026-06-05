@@ -112,7 +112,7 @@ const POIS: FestivalPoi[] = [
   { name: "BAR", emoji: "🍺", asset: "Bar.svg", lat: 55.690873, lng: 12.617855 },
   { name: "BAR", emoji: "🍺", asset: "Bar.svg", lat: 55.689738, lng: 12.617685 },
   { name: "WC", emoji: "🚻", asset: "WC.svg", lat: 55.689934, lng: 12.616594 },
-  { name: "WC", emoji: "🚻", asset: "WC.svg", lat: 55.69043, lng: 12.61572 },
+  { name: "WC", emoji: "🚻", asset: "WC.svg", lat: 55.69078, lng: 12.61603 },
   { name: "LOCKERS", emoji: "🔒", asset: "Lockers.svg", lat: 55.689957, lng: 12.615269 },
   { name: "ENTRANCE", emoji: "🚪", asset: "Entrance.svg", lat: 55.689672, lng: 12.615095 },
   { name: "WATER", emoji: "💧", asset: "Water.svg", lat: 55.690488, lng: 12.617131 },
@@ -176,13 +176,19 @@ function getZoneLabelMetrics(zoom: number, isMobile: boolean, mode: ZoneLabelMod
 }
 
 function getPoiSize(zoom: number, isMobile: boolean, poiName: string) {
-  const isPriorityPoi = poiName === "WATER" || poiName === "WC" || poiName === "TOILETS";
-  const base = isPriorityPoi
-    ? (isMobile ? 35 : 32)
-    : (isMobile ? 30 : 27);
-  const max = isPriorityPoi
+  const isHighPriorityPoi = poiName === "WATER" || poiName === "WC" || poiName === "TOILETS";
+  const isBoostedPoi = poiName === "BAR" || poiName === "LOCKERS" || poiName === "ENTRANCE";
+
+  const base = isHighPriorityPoi
     ? (isMobile ? 40 : 36)
-    : (isMobile ? 34 : 31);
+    : isBoostedPoi
+      ? (isMobile ? 36 : 32)
+      : (isMobile ? 30 : 27);
+  const max = isHighPriorityPoi
+    ? (isMobile ? 46 : 42)
+    : isBoostedPoi
+      ? (isMobile ? 42 : 38)
+      : (isMobile ? 34 : 31);
   return Math.min(max, Math.max(base, base + Math.max(0, zoom - 16)));
 }
 
