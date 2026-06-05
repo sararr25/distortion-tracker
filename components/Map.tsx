@@ -19,42 +19,49 @@ type LeafletModule = typeof import("leaflet");
 const FESTIVAL_ZONES = [
   {
     name: "RAVE", emoji: "🔊", color: "#FF6B00", iconFile: "Rave_1.svg",
+    labelOffset: [-0.0001, -0.00018] as [number, number],
     coords: [[55.690336, 12.615492], [55.690806, 12.615843], [55.690593, 12.61705], [55.690067, 12.616754], [55.690332, 12.615509]] as [number, number][],
   },
   {
     name: "FOREST", emoji: "🌲", color: "#00FF88", iconFile: "Forest.svg",
+    labelOffset: [-0.00028, -0.00036] as [number, number],
     coords: [[55.689713, 12.616944], [55.689626, 12.617308], [55.689949, 12.617951], [55.690194, 12.617727], [55.690147, 12.617133], [55.689717, 12.616944]] as [number, number][],
   },
   {
     name: "SUNRISE", emoji: "🌅", color: "#FF00FF", iconFile: "Sunrise.svg",
+    labelOffset: [0, 0.00016] as [number, number],
     coords: [[55.690482, 12.618658], [55.690628, 12.61893], [55.690628, 12.61942], [55.690359, 12.619462], [55.690352, 12.618839], [55.690482, 12.618658]] as [number, number][],
   },
   {
     name: "SHADOW", emoji: "👤", color: "#00FFFF", iconFile: "Shadow.svg",
+    labelOffset: [0, 0.00018] as [number, number],
     coords: [[55.690494, 12.620119], [55.690411, 12.620581], [55.690257, 12.620539], [55.6903, 12.620084], [55.690497, 12.620119]] as [number, number][],
   },
   {
     name: "OASIS", emoji: "🌊", color: "#CCFF00", iconFile: "Oasis.svg",
+    labelOffset: [-0.00004, -0.00034] as [number, number],
     coords: [[55.690812, 12.617791], [55.690723, 12.617696], [55.690636, 12.61797], [55.690761, 12.618172], [55.690868, 12.617989], [55.690812, 12.617791]] as [number, number][],
   },
   {
     name: "FOOD COURT", emoji: "🍔", color: "#FFD700", iconFile: "Food court.svg",
+    labelOffset: [0.00028, 0.0003] as [number, number],
     coords: [[55.69109, 12.617724], [55.691029, 12.618696], [55.691257, 12.618874], [55.691316, 12.618219], [55.691367, 12.61768], [55.69109, 12.617708]] as [number, number][],
   },
   {
     name: "AWARENESS", emoji: "🏥", color: "#FF4444", iconFile: "Awareness.svg",
+    labelOffset: [0.0002, 0.00002] as [number, number],
     coords: [[55.690923, 12.616165], [55.691157, 12.616317], [55.691181, 12.616044], [55.690953, 12.61594], [55.690923, 12.616159]] as [number, number][],
   },
 ];
 
 const POIS = [
-  { name: "BAR", emoji: "🍺", iconFile: "Bar.svg", lat: 55.690873, lng: 12.617855 },
-  { name: "BAR", emoji: "🍺", iconFile: "Bar.svg", lat: 55.689738, lng: 12.617685 },
-  { name: "WC", emoji: "🚻", iconFile: "WC.svg", lat: 55.689934, lng: 12.616594 },
-  { name: "LOCKERS", emoji: "🔒", iconFile: "Lockers.svg", lat: 55.689957, lng: 12.615269 },
-  { name: "ENTRANCE", emoji: "🚪", iconFile: "Entrance.svg", lat: 55.689672, lng: 12.615095 },
-  { name: "WATER", emoji: "💧", iconFile: "Water.svg", lat: 55.690488, lng: 12.617131 },
-  { name: "WATER", emoji: "💧", iconFile: "Water.svg", lat: 55.691081, lng: 12.616684 },
+  { name: "BAR", emoji: "🍺", iconFile: "Bar.svg", lat: 55.690873, lng: 12.617855, labelOffset: [-0.00022, 0.00032] as [number, number] },
+  { name: "BAR", emoji: "🍺", iconFile: "Bar.svg", lat: 55.689738, lng: 12.617685, labelOffset: [-0.0003, 0.00028] as [number, number] },
+  { name: "WC", emoji: "🚻", iconFile: "WC.svg", lat: 55.689934, lng: 12.616594, labelOffset: [-0.00018, -0.00018] as [number, number] },
+  { name: "LOCKERS", emoji: "🔒", iconFile: "Lockers.svg", lat: 55.689957, lng: 12.615269, labelOffset: [0.00018, 0.00014] as [number, number] },
+  { name: "ENTRANCE", emoji: "🚪", iconFile: "Entrance.svg", lat: 55.689672, lng: 12.615095, labelOffset: [-0.00018, -0.00008] as [number, number] },
+  { name: "WATER", emoji: "💧", iconFile: "Water.svg", lat: 55.690488, lng: 12.617131, labelOffset: [0.00014, -0.00018] as [number, number] },
+  { name: "WATER", emoji: "💧", iconFile: "Water.svg", lat: 55.691081, lng: 12.616684, labelOffset: [0.00018, 0.00022] as [number, number] },
 ];
 
 const POI_COLORS: Record<string, string> = {
@@ -99,6 +106,10 @@ function escapeHtml(value: string) {
 
 function iconAssetUrl(fileName: string) {
   return `/icons-zone/${encodeURIComponent(fileName)}`;
+}
+
+function shiftedCoords(lat: number, lng: number, offset?: [number, number]): [number, number] {
+  return [lat + (offset?.[0] ?? 0), lng + (offset?.[1] ?? 0)];
 }
 
 export default function Map({ locations, currentUid, focusedLocation }: Props) {
@@ -157,12 +168,21 @@ export default function Map({ locations, currentUid, focusedLocation }: Props) {
 
         const latC = zone.coords.reduce((s, p) => s + p[0], 0) / zone.coords.length;
         const lngC = zone.coords.reduce((s, p) => s + p[1], 0) / zone.coords.length;
-        L.marker([latC, lngC], {
+        const iconOnly = zone.name === "AWARENESS";
+        const iconSize = iconOnly ? 92 : 76;
+        const markerSize: [number, number] = iconOnly ? [92, 92] : [126, 108];
+        const markerAnchor: [number, number] = iconOnly ? [46, 46] : [63, 54];
+        const labelHtml = iconOnly
+          ? `<img src="${iconAssetUrl(zone.iconFile)}" alt="" title="FIRST AID" style="width:${iconSize}px;height:${iconSize}px;object-fit:contain;filter:drop-shadow(0 0 10px ${zone.color});pointer-events:none;" />`
+          : `<div style="display:grid;width:126px;justify-items:center;gap:3px;color:${zone.color};font-family:monospace;font-size:11px;font-weight:900;letter-spacing:0.1em;text-align:center;text-shadow:0 0 8px ${zone.color};white-space:nowrap;pointer-events:none;"><img src="${iconAssetUrl(zone.iconFile)}" alt="" style="width:${iconSize}px;height:${iconSize}px;object-fit:contain;filter:drop-shadow(0 0 8px ${zone.color});" /><span>${zone.name}</span></div>`;
+
+        L.marker(shiftedCoords(latC, lngC, zone.labelOffset), {
           interactive: false,
           icon: L.divIcon({
             className: "",
-            html: `<div style="display:flex;align-items:center;gap:7px;color:${zone.color};font-family:monospace;font-size:10px;font-weight:900;letter-spacing:0.1em;text-shadow:0 0 8px ${zone.color};white-space:nowrap;pointer-events:none;"><img src="${iconAssetUrl(zone.iconFile)}" alt="" style="width:38px;height:38px;object-fit:contain;filter:drop-shadow(0 0 6px ${zone.color});" />${zone.name}</div>`,
-            iconAnchor: [40, 18],
+            html: labelHtml,
+            iconSize: markerSize,
+            iconAnchor: markerAnchor,
           }),
         }).addTo(map);
       });
@@ -171,13 +191,20 @@ export default function Map({ locations, currentUid, focusedLocation }: Props) {
         const color = POI_COLORS[poi.name] ?? "#FFFFFF";
         const name = escapeHtml(poi.name);
         const iconUrl = iconAssetUrl(poi.iconFile);
+        const iconOnly = poi.name === "WATER";
+        const markerSize: [number, number] = iconOnly ? [84, 84] : [162, 84];
+        const markerAnchor: [number, number] = iconOnly ? [42, 42] : [81, 42];
+        const labelHtml = iconOnly
+          ? `<img src="${iconUrl}" alt="" title="${name}" style="width:84px;height:84px;object-fit:contain;filter:drop-shadow(0 0 10px ${color});pointer-events:none;" />`
+          : `<div style="display:flex;width:162px;align-items:center;justify-content:center;gap:7px;background:rgba(0,0,0,0.84);border:1px solid ${color};color:${color};font-family:monospace;font-size:11px;font-weight:900;letter-spacing:0.08em;padding:5px 8px;border-radius:3px;white-space:nowrap;box-shadow:0 0 8px rgba(0,0,0,0.75),0 0 6px ${color};pointer-events:none;" title="${name}"><img src="${iconUrl}" alt="" style="width:68px;height:68px;object-fit:contain;" />${name}</div>`;
 
-        L.marker([poi.lat, poi.lng], {
+        L.marker(shiftedCoords(poi.lat, poi.lng, poi.labelOffset), {
           interactive: false,
           icon: L.divIcon({
             className: "",
-            html: `<div style="display:flex;align-items:center;gap:6px;background:rgba(0,0,0,0.84);border:1px solid ${color};color:${color};font-family:monospace;font-size:10px;font-weight:900;letter-spacing:0.08em;padding:4px 7px;border-radius:3px;white-space:nowrap;box-shadow:0 0 8px rgba(0,0,0,0.75),0 0 6px ${color};pointer-events:none;" title="${name}"><img src="${iconUrl}" alt="" style="width:34px;height:34px;object-fit:contain;" />${name}</div>`,
-            iconAnchor: [42, 20],
+            html: labelHtml,
+            iconSize: markerSize,
+            iconAnchor: markerAnchor,
           }),
         }).addTo(map);
       });

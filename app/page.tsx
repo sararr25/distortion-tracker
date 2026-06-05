@@ -87,6 +87,8 @@ export default function Home() {
   const isFirstLoad = useRef(true);
   const audioContextRef = useRef<AudioContext | null>(null);
   const pulseTimeoutRef = useRef<number | null>(null);
+  const huntTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const huntNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
   const [localLocation, setLocalLocation] = useState<FriendLocation | undefined>();
@@ -103,6 +105,7 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [pulseAlert, setPulseAlert] = useState<{ from: string; emoji: string } | null>(null);
+  const [gpsHuntNotice, setGpsHuntNotice] = useState(false);
   const [pulseChooserOpen, setPulseChooserOpen] = useState(false);
   const [pulseTargetUids, setPulseTargetUids] = useState<Set<string>>(() => new Set());
   const [focusedLocation, setFocusedLocation] = useState<{ lat: number; lng: number; focusId: number } | null>(null);
@@ -114,6 +117,18 @@ export default function Home() {
   const handleSelfUpdate = useCallback((location: FriendLocation) => {
     setLocalLocation(location);
   }, []);
+
+  const clearAutoHuntTimeout = useCallback(() => {
+    if (huntTimeoutRef.current) {
+      clearTimeout(huntTimeoutRef.current);
+      huntTimeoutRef.current = null;
+    }
+  }, []);
+
+  const handleGpsIntervalChange = useCallback((interval: 3000 | 30000) => {
+    setGpsInterval(interval);
+    if (interval === 3000) clearAutoHuntTimeout();
+  }, [clearAutoHuntTimeout]);
 
   const displayName = profileName.trim() || user?.displayName || "Anonimo";
 
@@ -212,6 +227,12 @@ export default function Home() {
     return () => {
       if (pulseTimeoutRef.current) {
         window.clearTimeout(pulseTimeoutRef.current);
+      }
+      if (huntTimeoutRef.current) {
+        clearTimeout(huntTimeoutRef.current);
+      }
+      if (huntNoticeTimeoutRef.current) {
+        clearTimeout(huntNoticeTimeoutRef.current);
       }
     };
   }, []);
@@ -323,9 +344,24 @@ export default function Home() {
     }
   }, []);
 
-  const triggerPulse = useCallback((name: string, pulseEmoji: string) => {
+  const activateTemporaryHuntMode = useCallback(() => {
     setGpsInterval(3000);
 
+    if (huntTimeoutRef.current) clearTimeout(huntTimeoutRef.current);
+    huntTimeoutRef.current = setTimeout(() => {
+      setGpsInterval(30000);
+      huntTimeoutRef.current = null;
+    }, 2 * 60 * 1000);
+
+    setGpsHuntNotice(true);
+    if (huntNoticeTimeoutRef.current) clearTimeout(huntNoticeTimeoutRef.current);
+    huntNoticeTimeoutRef.current = setTimeout(() => {
+      setGpsHuntNotice(false);
+      huntNoticeTimeoutRef.current = null;
+    }, 2000);
+  }, []);
+
+  const triggerPulse = useCallback((name: string, pulseEmoji: string, autoHunt = true) => {
     if (navigator.vibrate) {
       navigator.vibrate([200, 100, 200, 100, 400]);
     }
@@ -337,7 +373,9 @@ export default function Home() {
       window.clearTimeout(pulseTimeoutRef.current);
     }
     pulseTimeoutRef.current = window.setTimeout(() => setPulseAlert(null), 2500);
-  }, [playPulseSound]);
+
+    if (autoHunt) activateTemporaryHuntMode();
+  }, [activateTemporaryHuntMode, playPulseSound]);
 
   useEffect(() => {
     if (!user) return;
@@ -444,7 +482,7 @@ export default function Home() {
   const sendPulse = useCallback(async (recipients?: string[]) => {
     if (recipients && recipients.length === 0) return;
 
-    triggerPulse(displayName, emoji);
+    triggerPulse(displayName, emoji, false);
     setPulseChooserOpen(false);
     await push(ref(db, "pulses"), {
       from: displayName,
@@ -549,6 +587,19 @@ export default function Home() {
           >
             SENT A PULSE
           </div>
+          {gpsHuntNotice && (
+            <div
+              style={{
+                color: "#FF6B00",
+                fontFamily: "monospace",
+                fontSize: "0.8rem",
+                fontWeight: 900,
+                letterSpacing: "0.12em",
+              }}
+            >
+              📡 GPS → HUNT MODE
+            </div>
+          )}
         </div>
       )}
 
@@ -661,7 +712,7 @@ export default function Home() {
           userName={displayName}
           userEmail={user.email ?? "Nessuna email"}
           onLogout={handleLogout}
-          onGpsIntervalChange={setGpsInterval}
+          onGpsIntervalChange={handleGpsIntervalChange}
           onNameChange={setProfileName}
           onEmojiChange={handleEmojiChange}
           onFocusFriend={handleFocusFriend}
@@ -680,7 +731,7 @@ export default function Home() {
         userEmail={user.email ?? "Nessuna email"}
         onClose={() => setMenuOpen(false)}
         onEmojiChange={handleEmojiChange}
-        onGpsIntervalChange={setGpsInterval}
+        onGpsIntervalChange={handleGpsIntervalChange}
         onLogout={handleLogout}
         onNameChange={setProfileName}
         isEmojiLocked={isEmojiLocked}
