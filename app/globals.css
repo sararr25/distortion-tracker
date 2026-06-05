@@ -382,6 +382,132 @@ button {
   height: calc(100dvh - 5rem);
 }
 
+.lineup-workspace {
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.lineup-screen {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  height: 100%;
+  overflow-y: auto;
+  padding: 1rem;
+  background: var(--surface-lowest);
+}
+
+.lineup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.25rem;
+  color: #666666;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.lineup-card {
+  width: 100%;
+  margin-bottom: 0;
+  border-radius: 6px;
+  background: #111111;
+  padding: 0.75rem 1rem;
+}
+
+.lineup-stage {
+  margin-bottom: 0.75rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lineup-now {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.lineup-now > span {
+  color: #ccff00;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.65rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.lineup-now p {
+  margin: 0;
+  color: #444444;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.82rem;
+}
+
+.lineup-now-artist {
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) 1fr;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.lineup-now-artist strong {
+  min-width: 0;
+  color: #ffffff;
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.lineup-now-artist small {
+  color: #777777;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+  line-height: 1.2;
+}
+
+.lineup-now-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #00ff88;
+  box-shadow: 0 0 8px #00ff88;
+  animation: nowPulse 1.5s infinite;
+}
+
+.lineup-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+
+.lineup-next span {
+  color: #666666;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.65rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.lineup-next strong {
+  color: #aaaaaa;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.lineup-next small {
+  color: #555555;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+}
+
 .map-stage {
   position: relative;
   min-width: 0;
@@ -1579,7 +1705,7 @@ button {
   z-index: 20;
   display: grid;
   height: 4.7rem;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   align-items: center;
   border-top: 1px solid var(--secondary-strong);
   background: rgba(19, 19, 19, 0.92);
@@ -1642,6 +1768,25 @@ button {
 
   .workspace {
     height: calc(100dvh - 3.8rem);
+  }
+
+  .lineup-screen {
+    padding: 0.75rem 0.75rem calc(5.25rem + env(safe-area-inset-bottom));
+  }
+
+  .lineup-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.68rem;
+  }
+
+  .lineup-now-artist {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .lineup-now-artist small {
+    grid-column: 2;
   }
 
   .map-floating {
@@ -1789,7 +1934,7 @@ button {
 
   .bottom-nav a,
   .bottom-nav button {
-    width: min(4.6rem, 22vw);
+    width: min(3.8rem, 18vw);
     height: 3rem;
     font-size: 1rem;
   }
@@ -1819,6 +1964,14 @@ button {
 
   .workspace {
     grid-template-columns: minmax(0, 1fr) 24rem;
+  }
+
+  .lineup-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lineup-screen {
+    padding: 1.5rem;
   }
 
   .map-floating {
@@ -1930,6 +2083,19 @@ button {
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@keyframes nowPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.6;
+    transform: scale(1.4);
   }
 }
 

@@ -7,6 +7,7 @@ import { get, off, onChildAdded, onDisconnect, onValue, push, ref, remove, runTr
 import { auth, db, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
+import Lineup from "@/components/Lineup";
 import { getNearestStage } from "@/components/Map";
 
 const Map = dynamic(() => import("@/components/Map"), {
@@ -81,6 +82,7 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 type GpsInterval = 3000 | 60000 | 300000;
+type ActiveScreen = "map" | "lineup";
 
 function emojiKey(value: string) {
   return encodeURIComponent(value);
@@ -195,6 +197,7 @@ export default function Home() {
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [installBannerMode, setInstallBannerMode] = useState<"android" | "ios" | null>(null);
+  const [activeScreen, setActiveScreen] = useState<ActiveScreen>("map");
 
   const handleUpdate = useCallback((data: Record<string, FriendLocation>) => {
     setLocations(data);
@@ -983,15 +986,34 @@ export default function Home() {
           <strong>TRACKER</strong>
         </div>
         <nav className="desktop-nav" aria-label="Sections">
-          <a className="nav-item active" href="#map">
+          <button
+            className={activeScreen === "map" ? "nav-item active" : "nav-item"}
+            type="button"
+            onClick={() => setActiveScreen("map")}
+          >
             <span>⌖</span> Live Map
-          </a>
-          <a className="nav-item" href="#radar">
+          </button>
+          <button
+            className={activeScreen === "lineup" ? "nav-item active" : "nav-item"}
+            type="button"
+            onClick={() => setActiveScreen("lineup")}
+          >
+            <span>🎵</span> Lineup
+          </button>
+          <button
+            className="nav-item"
+            type="button"
+            onClick={() => setActiveScreen("map")}
+          >
             <span>◎</span> Friend Radar
-          </a>
-          <a className="nav-item" href="#profile">
+          </button>
+          <button
+            className="nav-item"
+            type="button"
+            onClick={() => setActiveScreen("map")}
+          >
             <span>▣</span> Profile
-          </a>
+          </button>
         </nav>
         <button
           className="share-pill"
@@ -1018,117 +1040,123 @@ export default function Home() {
         />
       )}
 
-      <div className="workspace">
-        <section className="map-stage" id="map" aria-label="Live map">
-          <div className="map-frame">
-            <Map
-              locations={effectiveLocations}
-              currentUid={user.uid}
-              mapStyle={mapStyle}
-              meetingPoint={meetingPoint}
-              onMapReady={handleMapReady}
-              focusedLocation={focusedLocation}
-            />
-            <div className="map-style-switcher" aria-label="Map style">
-              {(["dark", "light", "satellite"] as const).map((style) => (
-                <button
-                  key={style}
-                  className={mapStyle === style ? "active" : ""}
-                  onClick={() => setMapStyle(style)}
-                  type="button"
-                  aria-label={`Use ${style} map style`}
-                  aria-pressed={mapStyle === style}
-                >
-                  {style === "dark" ? "🌑" : style === "light" ? "🌕" : "🛰️"}
-                </button>
-              ))}
-            </div>
-            <div className="scanline-layer" />
-            <div className="radar-sweep" />
-          </div>
-
-          <div className="map-floating">
-            <label className="search-box">
-              <span>⌕</span>
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="LOCATE FRIEND"
-                type="search"
+      {activeScreen === "lineup" ? (
+        <div className="workspace lineup-workspace">
+          <Lineup />
+        </div>
+      ) : (
+        <div className="workspace">
+          <section className="map-stage" id="map" aria-label="Live map">
+            <div className="map-frame">
+              <Map
+                locations={effectiveLocations}
+                currentUid={user.uid}
+                mapStyle={mapStyle}
+                meetingPoint={meetingPoint}
+                onMapReady={handleMapReady}
+                focusedLocation={focusedLocation}
               />
-            </label>
-            <div className="map-tools" aria-label="Stato mappa">
-              <span>{onlineCount} ONLINE</span>
-              <span>{sharing ? "GPS ACTIVE" : "GPS MUTED"}</span>
+              <div className="map-style-switcher" aria-label="Map style">
+                {(["dark", "light", "satellite"] as const).map((style) => (
+                  <button
+                    key={style}
+                    className={mapStyle === style ? "active" : ""}
+                    onClick={() => setMapStyle(style)}
+                    type="button"
+                    aria-label={`Use ${style} map style`}
+                    aria-pressed={mapStyle === style}
+                  >
+                    {style === "dark" ? "🌑" : style === "light" ? "🌕" : "🛰️"}
+                  </button>
+                ))}
+              </div>
+              <div className="scanline-layer" />
+              <div className="radar-sweep" />
             </div>
-          </div>
 
-          <div className="zone-card">
-            <p>[ZONE_STATUS]</p>
-            <div>
-              <span>REFSHALEOEN</span>
-              <strong>TRACKING</strong>
+            <div className="map-floating">
+              <label className="search-box">
+                <span>⌕</span>
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="LOCATE FRIEND"
+                  type="search"
+                />
+              </label>
+              <div className="map-tools" aria-label="Map status">
+                <span>{onlineCount} ONLINE</span>
+                <span>{sharing ? "GPS ACTIVE" : "GPS MUTED"}</span>
+              </div>
             </div>
-            <div>
-              <span>FRIENDS</span>
-              <strong>{friends.length} ONLINE</strong>
+
+            <div className="zone-card">
+              <p>[ZONE_STATUS]</p>
+              <div>
+                <span>REFSHALEOEN</span>
+                <strong>TRACKING</strong>
+              </div>
+              <div>
+                <span>FRIENDS</span>
+                <strong>{friends.length} ONLINE</strong>
+              </div>
             </div>
-          </div>
 
-          {currentStage && <div className="you-stage-badge">YOU: {currentStage}</div>}
+            {currentStage && <div className="you-stage-badge">YOU: {currentStage}</div>}
 
-          <button
-            className="center-me-button"
-            type="button"
-            aria-label="Center map on me"
-            onClick={handleCenterOnMe}
-          >
-            🎯
-          </button>
+            <button
+              className="center-me-button"
+              type="button"
+              aria-label="Center map on me"
+              onClick={handleCenterOnMe}
+            >
+              🎯
+            </button>
 
-          <button
-            className="pulse-button"
-            type="button"
-            onClick={handleOpenPulseChooser}
-          >
-            <span>SEND</span>
-            <strong>PULSE</strong>
-          </button>
+            <button
+              className="pulse-button"
+              type="button"
+              onClick={handleOpenPulseChooser}
+            >
+              <span>SEND</span>
+              <strong>PULSE</strong>
+            </button>
 
-          <MobileRadar
-            friends={friends}
+            <MobileRadar
+              friends={friends}
+              currentLocation={currentLocation}
+              open={panelOpen}
+              tick={tick}
+              now={now}
+              activeFriend={activeFriend}
+              meetingPoint={meetingPoint}
+              onFocusFriend={handleRadarFriendFocus}
+              onFocusMeetingPoint={handleFocusMeetingPoint}
+              onToggleOpen={() => setPanelOpen((value) => !value)}
+            />
+          </section>
+
+          <CommandCenter
             currentLocation={currentLocation}
-            open={panelOpen}
-            tick={tick}
+            friends={friends}
+            emoji={emoji}
+            gpsInterval={gpsInterval}
+            emojis={EMOJIS}
             now={now}
-            activeFriend={activeFriend}
-            meetingPoint={meetingPoint}
-            onFocusFriend={handleRadarFriendFocus}
-            onFocusMeetingPoint={handleFocusMeetingPoint}
-            onToggleOpen={() => setPanelOpen((value) => !value)}
+            profileName={profileName}
+            userName={displayName}
+            userEmail={user.email ?? "No email"}
+            onLogout={handleLogout}
+            onGpsIntervalChange={handleGpsIntervalChange}
+            onNameChange={setProfileName}
+            onEmojiChange={handleEmojiChange}
+            onSaveProfile={handleSaveProfile}
+            onFocusFriend={handleFocusFriend}
+            onSendPulse={handleOpenPulseChooser}
+            isEmojiLocked={isEmojiLocked}
           />
-        </section>
-
-        <CommandCenter
-          currentLocation={currentLocation}
-          friends={friends}
-          emoji={emoji}
-          gpsInterval={gpsInterval}
-          emojis={EMOJIS}
-          now={now}
-          profileName={profileName}
-          userName={displayName}
-          userEmail={user.email ?? "No email"}
-          onLogout={handleLogout}
-          onGpsIntervalChange={handleGpsIntervalChange}
-          onNameChange={setProfileName}
-          onEmojiChange={handleEmojiChange}
-          onSaveProfile={handleSaveProfile}
-          onFocusFriend={handleFocusFriend}
-          onSendPulse={handleOpenPulseChooser}
-          isEmojiLocked={isEmojiLocked}
-        />
-      </div>
+        </div>
+      )}
 
       <MobileMenu
         open={menuOpen}
@@ -1163,12 +1191,26 @@ export default function Home() {
           type="button"
           aria-label={panelOpen ? "Close friend radar" : "Open friend radar"}
           onClick={() => {
+            setActiveScreen("map");
             setPanelOpen((value) => !value);
             setMenuOpen(false);
           }}
         >
           <span>◎</span>
           <small>Radar</small>
+        </button>
+        <button
+          className={activeScreen === "lineup" ? "active" : ""}
+          type="button"
+          aria-label="Open lineup"
+          onClick={() => {
+            setActiveScreen("lineup");
+            setPanelOpen(false);
+            setMenuOpen(false);
+          }}
+        >
+          <span>🎵</span>
+          <small>Lineup</small>
         </button>
         <button type="button" aria-label="Send pulse" onClick={handleOpenPulseChooser}>
           <span>⌁</span>
@@ -1177,7 +1219,7 @@ export default function Home() {
         <button
           className={sharing ? "active" : ""}
           type="button"
-          aria-label={sharing ? "Interrompi condivisione" : "Avvia condivisione"}
+          aria-label={sharing ? "Stop sharing" : "Start sharing"}
           onClick={handleSharingToggle}
         >
           <span>{sharing ? "◉" : "○"}</span>
@@ -1583,7 +1625,7 @@ function PulseChooser({
           SEND TO ALL
         </button>
 
-        <div className="pulse-choice-list" aria-label="Seleziona destinatari">
+        <div className="pulse-choice-list" aria-label="Select recipients">
           {friends.length === 0 ? (
             <div className="empty-state">NO FRIENDS ONLINE</div>
           ) : (
