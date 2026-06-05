@@ -38,6 +38,16 @@ type FriendSignal = {
   lastSeen: number;
 };
 
+type WakeLockSentinel = {
+  release: () => Promise<void>;
+};
+
+type NavigatorWithWakeLock = Navigator & {
+  wakeLock?: {
+    request: (type: "screen") => Promise<WakeLockSentinel>;
+  };
+};
+
 function emojiKey(value: string) {
   return encodeURIComponent(value);
 }
@@ -55,6 +65,16 @@ function formatAge(updatedAt: number, now: number) {
   const seconds = Math.max(0, Math.floor((now - updatedAt) / 1000));
   if (seconds < 60) return `${seconds}s`;
   return `${Math.floor(seconds / 60)}m`;
+}
+
+function getLastSeen(updatedAt: number): string {
+  const diffMs = Date.now() - updatedAt;
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffSec < 15) return "adesso";
+  if (diffSec < 60) return `${diffSec}s fa`;
+  if (diffMin < 60) return `${diffMin}min fa`;
+  return "offline";
 }
 
 function getDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -85,7 +105,6 @@ function normalizeTimestamp(value: unknown) {
 export default function Home() {
   const { user, loading } = useAuth();
   const isFirstLoad = useRef(true);
-  const audioContextRef = useRef<AudioContext | null>(null);
   const pulseTimeoutRef = useRef<number | null>(null);
   const huntTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const huntNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -104,6 +123,7 @@ export default function Home() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [tick, setTick] = useState(0);
   const [pulseAlert, setPulseAlert] = useState<{ from: string; emoji: string } | null>(null);
   const [gpsHuntNotice, setGpsHuntNotice] = useState(false);
   const [pulseChooserOpen, setPulseChooserOpen] = useState(false);
@@ -224,6 +244,33 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const interval = setInterval(() => setTick((value) => value + 1), 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let lock: WakeLockSentinel | null = null;
+    const enable = async () => {
+      try {
+        if ("wakeLock" in navigator) {
+          lock = await (navigator as NavigatorWithWakeLock).wakeLock?.request("screen") ?? null;
+        }
+      } catch (e) {
+        console.warn("Wake lock failed:", e);
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void enable();
+    };
+    void enable();
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      void lock?.release();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (pulseTimeoutRef.current) {
         window.clearTimeout(pulseTimeoutRef.current);
@@ -314,33 +361,57 @@ export default function Home() {
   }, [profileHydratedUid, user]);
 
   const playPulseSound = useCallback(() => {
-    const AudioContextConstructor =
-      window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    try {
+      const AudioContextConstructor =
+        window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
 
-    if (!AudioContextConstructor) return;
+      if (!AudioContextConstructor) return;
 
-    const ctx = audioContextRef.current ?? new AudioContextConstructor();
-    audioContextRef.current = ctx;
+      const ctx = new AudioContextConstructor();
 
-    const play = () => {
-      [440, 550, 660].forEach((freq, i) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.frequency.value = freq;
-        osc.type = "sine";
-        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.3);
-        osc.start(ctx.currentTime + i * 0.15);
-        osc.stop(ctx.currentTime + i * 0.15 + 0.3);
+      void ctx.resume().then(() => {
+        [0, 0.3, 0.6].forEach((startTime) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(80, ctx.currentTime + startTime);
+          osc.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + startTime + 0.25);
+          gain.gain.setValueAtTime(1.2, ctx.currentTime + startTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + 0.3);
+          osc.start(ctx.currentTime + startTime);
+          osc.stop(ctx.currentTime + startTime + 0.35);
+        });
+
+        [0, 0.3, 0.6].forEach((startTime) => {
+          const osc2 = ctx.createOscillator();
+          const gain2 = ctx.createGain();
+          osc2.connect(gain2);
+          gain2.connect(ctx.destination);
+          osc2.type = "square";
+          osc2.frequency.setValueAtTime(880, ctx.currentTime + startTime);
+          gain2.gain.setValueAtTime(0.4, ctx.currentTime + startTime);
+          gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + 0.15);
+          osc2.start(ctx.currentTime + startTime);
+          osc2.stop(ctx.currentTime + startTime + 0.2);
+        });
       });
-    };
+    } catch (e) {
+      console.warn("Audio failed:", e);
+    }
+  }, []);
 
-    if (ctx.state === "suspended") {
-      void ctx.resume().then(play).catch(play);
-    } else {
-      play();
+  const requestWakeLock = useCallback(async () => {
+    try {
+      if ("wakeLock" in navigator) {
+        const lock = await (navigator as NavigatorWithWakeLock).wakeLock?.request("screen");
+        setTimeout(() => {
+          void lock?.release();
+        }, 30000);
+      }
+    } catch (e) {
+      console.warn("Wake lock failed:", e);
     }
   }, []);
 
@@ -363,8 +434,10 @@ export default function Home() {
 
   const triggerPulse = useCallback((name: string, pulseEmoji: string, autoHunt = true) => {
     if (navigator.vibrate) {
-      navigator.vibrate([200, 100, 200, 100, 400]);
+      navigator.vibrate([500, 100, 500, 100, 500, 100, 800]);
     }
+
+    void requestWakeLock();
 
     playPulseSound();
 
@@ -375,7 +448,7 @@ export default function Home() {
     pulseTimeoutRef.current = window.setTimeout(() => setPulseAlert(null), 2500);
 
     if (autoHunt) activateTemporaryHuntMode();
-  }, [activateTemporaryHuntMode, playPulseSound]);
+  }, [activateTemporaryHuntMode, playPulseSound, requestWakeLock]);
 
   useEffect(() => {
     if (!user) return;
@@ -696,6 +769,7 @@ export default function Home() {
             friends={friends}
             currentLocation={currentLocation}
             open={panelOpen}
+            tick={tick}
             onFocusFriend={handleFocusFriend}
             onToggleOpen={() => setPanelOpen((value) => !value)}
           />
@@ -1160,12 +1234,14 @@ function MobileRadar({
   currentLocation,
   friends,
   open,
+  tick,
   onFocusFriend,
   onToggleOpen,
 }: {
   currentLocation?: FriendLocation;
   friends: [string, FriendSignal][];
   open: boolean;
+  tick: number;
   onFocusFriend: (friend: FriendLocation) => void;
   onToggleOpen: () => void;
 }) {
@@ -1184,26 +1260,41 @@ function MobileRadar({
         <h2>Friend Radar</h2>
         <p>{friends.length} connected</p>
       </div>
+      <span hidden>{tick}</span>
       <div className="mobile-friends">
         {friends.length === 0 ? (
           <div className="mobile-empty">NO FRIENDS ONLINE</div>
         ) : (
-          friends.map(([uid, friend]) => (
-            <button
-              className="mobile-friend"
-              key={uid}
-              type="button"
-              aria-disabled={!friend.location}
-              title={friend.location ? undefined : "GPS non condiviso"}
-              onClick={() => {
-                if (friend.location) onFocusFriend(friend.location);
-              }}
-            >
-              <div>{friend.emoji}</div>
-              <span>{friend.name.split(" ")[0]} · {friend.location ? formatDistance(currentLocation, friend.location) : "ONLINE"}</span>
-              <small>{friend.location ? getNearestStage(friend.location.lat, friend.location.lng) : "GPS MUTED"}</small>
-            </button>
-          ))
+          friends.map(([uid, friend]) => {
+            const updatedAt = friend.location?.updatedAt ?? friend.updatedAt;
+            const diffMin = Math.floor((Date.now() - updatedAt) / 60000);
+
+            return (
+              <button
+                className="mobile-friend"
+                key={uid}
+                type="button"
+                aria-disabled={!friend.location}
+                title={friend.location ? undefined : "GPS non condiviso"}
+                onClick={() => {
+                  if (friend.location) onFocusFriend(friend.location);
+                }}
+              >
+                <div>{friend.emoji}</div>
+                <span>{friend.name.split(" ")[0]} · {friend.location ? formatDistance(currentLocation, friend.location) : "ONLINE"}</span>
+                <small
+                  style={{
+                    fontFamily: "monospace",
+                    fontSize: "0.65rem",
+                    color: diffMin < 2 ? "#CCFF00" : diffMin < 10 ? "#FF6B00" : "#666",
+                  }}
+                >
+                  {getLastSeen(updatedAt)}
+                </small>
+                <small>{friend.location ? getNearestStage(friend.location.lat, friend.location.lng) : "GPS MUTED"}</small>
+              </button>
+            );
+          })
         )}
       </div>
     </aside>
