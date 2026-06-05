@@ -845,51 +845,9 @@ button {
   left: 1rem;
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 1rem;
   pointer-events: none;
-}
-
-.search-box {
-  display: flex;
-  width: min(100%, 23rem);
-  height: 3rem;
-  align-items: center;
-  border: 1px solid var(--outline);
-  background: rgba(19, 19, 19, 0.42);
-  color: var(--on-surface);
-  pointer-events: auto;
-  backdrop-filter: blur(20px);
-}
-
-.search-box:focus-within {
-  border-color: var(--secondary);
-  box-shadow: 0 0 16px rgba(125, 244, 255, 0.28);
-}
-
-.search-box span {
-  padding-left: 1rem;
-  color: var(--secondary);
-  font-size: 1.35rem;
-}
-
-.search-box input {
-  min-width: 0;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--on-surface);
-  padding: 0 1rem;
-  font-family: var(--font-mono), monospace;
-  font-size: 0.75rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.search-box input::placeholder {
-  color: var(--on-muted);
 }
 
 .map-tools {
@@ -1770,7 +1728,7 @@ button {
   z-index: 20;
   display: grid;
   height: 4.7rem;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   align-items: center;
   border-top: 1px solid var(--secondary-strong);
   background: rgba(19, 19, 19, 0.92);
@@ -1864,24 +1822,6 @@ button {
     top: 4.2rem;
     font-size: 0.64rem;
     white-space: normal;
-  }
-
-  .search-box {
-    width: min(100%, 16.5rem);
-    height: 2.45rem;
-    background: rgba(19, 19, 19, 0.58);
-    backdrop-filter: blur(14px);
-  }
-
-  .search-box span {
-    padding-left: 0.75rem;
-    font-size: 1.05rem;
-  }
-
-  .search-box input {
-    padding: 0 0.7rem;
-    font-size: 0.62rem;
-    letter-spacing: 0.08em;
   }
 
   .zone-card {
@@ -1999,7 +1939,7 @@ button {
 
   .bottom-nav a,
   .bottom-nav button {
-    width: min(3.8rem, 18vw);
+    width: min(4.6rem, 22vw);
     height: 3rem;
     font-size: 1rem;
   }
@@ -2092,10 +2032,6 @@ button {
   .status-dot {
     width: 0.45rem;
     height: 0.45rem;
-  }
-
-  .search-box {
-    width: min(calc(100% - 5.35rem), 14.25rem);
   }
 
   .bottom-nav small {

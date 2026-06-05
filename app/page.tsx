@@ -3,7 +3,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { signInWithRedirect, signOut } from "firebase/auth";
-import { get, off, onChildAdded, onDisconnect, onValue, push, ref, remove, runTransaction, serverTimestamp, set, update } from "firebase/database";
+import {
+  get,
+  limitToLast,
+  off,
+  onChildAdded,
+  onDisconnect,
+  onValue,
+  push,
+  query as databaseQuery,
+  ref,
+  remove,
+  runTransaction,
+  serverTimestamp,
+  set,
+  update,
+} from "firebase/database";
 import { auth, db, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
@@ -68,6 +83,11 @@ type MeetingPoint = {
   label: string;
   setBy: string;
   setAt: number;
+};
+
+type MeetingPointEvent = MeetingPoint & {
+  uid?: string;
+  fromEmoji?: string;
 };
 
 // Firebase rules reminder: "meetingPoint": { ".read": "auth != null", ".write": "auth != null" }
@@ -172,6 +192,7 @@ export default function Home() {
   const activeFriendTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const installBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const flyToRef = useRef<((lat: number, lng: number) => void) | null>(null);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
@@ -182,7 +203,6 @@ export default function Home() {
   const [profileHydratedUid, setProfileHydratedUid] = useState<string | null>(null);
   const [emojiLocks, setEmojiLocks] = useState<Record<string, string>>({});
   const [profileName, setProfileName] = useState("");
-  const [query, setQuery] = useState("");
   const [authError, setAuthError] = useState("");
   const [panelOpen, setPanelOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -225,6 +245,12 @@ export default function Home() {
 
   const handleMapReady = useCallback((flyTo: (lat: number, lng: number) => void) => {
     flyToRef.current = flyTo;
+  }, []);
+
+  const requestNotificationPermission = useCallback(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      void Notification.requestPermission();
+    }
   }, []);
 
   const displayName = profileName.trim() || user?.displayName || "Anonymous";
@@ -395,10 +421,11 @@ export default function Home() {
   }, [displayName, emoji, isEmojiLocked, profiles, user]);
 
   const handleSharingToggle = useCallback(() => {
+    requestNotificationPermission();
     setSharing((value) => {
       return !value;
     });
-  }, []);
+  }, [requestNotificationPermission]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNow(Date.now()), 15000);
@@ -467,6 +494,39 @@ export default function Home() {
     if ("Notification" in window && Notification.permission === "default") {
       void Notification.requestPermission();
     }
+  }, []);
+
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      void navigator.serviceWorker.register("/sw.js").catch((error) => {
+        console.warn("Service worker registration failed:", error);
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    const unlockAudio = () => {
+      try {
+        const AudioContextConstructor =
+          window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+        if (!AudioContextConstructor) return;
+        audioContextRef.current ??= new AudioContextConstructor();
+        void audioContextRef.current.resume();
+      } catch (error) {
+        console.warn("Audio unlock failed:", error);
+      }
+    };
+
+    window.addEventListener("pointerdown", unlockAudio, { once: true });
+    window.addEventListener("touchstart", unlockAudio, { once: true });
+    window.addEventListener("keydown", unlockAudio, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("touchstart", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
   }, []);
 
   useEffect(() => {
@@ -581,7 +641,8 @@ export default function Home() {
 
       if (!AudioContextConstructor) return;
 
-      const ctx = new AudioContextConstructor();
+      const ctx = audioContextRef.current ?? new AudioContextConstructor();
+      audioContextRef.current = ctx;
 
       void ctx.resume().then(() => {
         [0, 0.3, 0.6].forEach((startTime) => {
@@ -646,6 +707,38 @@ export default function Home() {
     }, 2000);
   }, []);
 
+  const showAlertNotification = useCallback((title: string, body: string, tag: string) => {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+    const options = {
+      body,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag,
+      renotify: true,
+      requireInteraction: true,
+      vibrate: [500, 100, 500, 100, 800],
+      data: { url: "/" },
+    } as NotificationOptions & {
+      badge?: string;
+      renotify?: boolean;
+      requireInteraction?: boolean;
+      vibrate?: number[];
+      data?: { url: string };
+    };
+
+    if ("serviceWorker" in navigator) {
+      void navigator.serviceWorker.ready
+        .then((registration) => registration.showNotification(title, options))
+        .catch(() => {
+          new Notification(title, options);
+        });
+      return;
+    }
+
+    new Notification(title, options);
+  }, []);
+
   const triggerPulse = useCallback((name: string, pulseEmoji: string, autoHunt = true) => {
     if (navigator.vibrate) {
       navigator.vibrate([500, 100, 500, 100, 500, 100, 800]);
@@ -662,14 +755,7 @@ export default function Home() {
       titleTimeoutRef.current = null;
     }, 10000);
 
-    if ("Notification" in window && Notification.permission === "granted") {
-      new Notification(`⚡ ${name} sent a pulse!`, {
-        body: "Open the app to see their location",
-        icon: "/icon-192.png",
-        tag: "pulse",
-        renotify: true,
-      } as NotificationOptions & { renotify: boolean });
-    }
+    showAlertNotification(`⚡ ${name} sent a pulse!`, "Open the app to see their location", "pulse");
 
     setPulseAlert({ from: name, emoji: pulseEmoji });
     if (pulseTimeoutRef.current) {
@@ -678,7 +764,29 @@ export default function Home() {
     pulseTimeoutRef.current = window.setTimeout(() => setPulseAlert(null), 2500);
 
     if (autoHunt) activateTemporaryHuntMode();
-  }, [activateTemporaryHuntMode, playPulseSound, requestWakeLock]);
+  }, [activateTemporaryHuntMode, playPulseSound, requestWakeLock, showAlertNotification]);
+
+  const triggerMeetingPointAlert = useCallback((meeting: MeetingPointEvent) => {
+    if (navigator.vibrate) {
+      navigator.vibrate([700, 120, 700, 120, 1000]);
+    }
+
+    void requestWakeLock();
+    playPulseSound();
+
+    document.title = `📍 MEET: ${meeting.label.toUpperCase()}`;
+    if (titleTimeoutRef.current) clearTimeout(titleTimeoutRef.current);
+    titleTimeoutRef.current = setTimeout(() => {
+      document.title = "Distortion Tracker";
+      titleTimeoutRef.current = null;
+    }, 10000);
+
+    showAlertNotification(
+      `📍 Meeting point set by ${meeting.setBy}`,
+      `${meeting.label} · open the app to see it on the map`,
+      "meeting-point"
+    );
+  }, [playPulseSound, requestWakeLock, showAlertNotification]);
 
   useEffect(() => {
     if (!user) return;
@@ -702,6 +810,22 @@ export default function Home() {
       isFirstLoad.current = true;
     };
   }, [triggerPulse, user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const listeningSince = Date.now();
+    const eventsRef = databaseQuery(ref(db, "meetingPointEvents"), limitToLast(25));
+    const unsub = onChildAdded(eventsRef, (snapshot) => {
+      const event = snapshot.val() as MeetingPointEvent | null;
+      if (!event || event.setAt < listeningSince - 5000) return;
+      triggerMeetingPointAlert(event);
+    });
+
+    return () => {
+      unsub();
+    };
+  }, [triggerMeetingPointAlert, user]);
 
   const effectiveLocations = locations;
 
@@ -743,22 +867,22 @@ export default function Home() {
         ];
       })
       .filter((entry): entry is [string, FriendSignal] => Boolean(entry))
-      .filter(([, friend]) => friend.name.toLowerCase().includes(query.toLowerCase()))
       .sort(([, a], [, b]) => {
         const aTime = a.location?.updatedAt ?? a.lastSeen ?? a.updatedAt;
         const bTime = b.location?.updatedAt ?? b.lastSeen ?? b.updatedAt;
         return bTime - aTime;
       });
-  }, [effectiveLocations, liveEntries, now, profiles, query, user?.uid]);
+  }, [effectiveLocations, liveEntries, now, profiles, user?.uid]);
 
   const currentLocation = user ? effectiveLocations[user.uid] : undefined;
   const currentStage = sharing && currentLocation ? getNearestStage(currentLocation.lat, currentLocation.lng) : "";
   const onlineCount = friends.length + 1;
 
   const handleOpenPulseChooser = useCallback(() => {
+    requestNotificationPermission();
     setPulseTargetUids(new Set(friends.map(([uid]) => uid)));
     setPulseChooserOpen(true);
-  }, [friends]);
+  }, [friends, requestNotificationPermission]);
 
   const handlePulseTargetToggle = useCallback((uid: string) => {
     setPulseTargetUids((current) => {
@@ -779,6 +903,7 @@ export default function Home() {
   const sendPulse = useCallback(async (recipients?: string[]) => {
     if (recipients && recipients.length === 0) return;
 
+    requestNotificationPermission();
     triggerPulse(displayName, emoji, false);
     setPulseChooserOpen(false);
     await push(ref(db, "pulses"), {
@@ -788,7 +913,7 @@ export default function Home() {
       recipients: recipients ?? null,
       at: serverTimestamp(),
     });
-  }, [displayName, emoji, triggerPulse]);
+  }, [displayName, emoji, requestNotificationPermission, triggerPulse]);
 
   const handleSendPulseToAll = useCallback(() => {
     void sendPulse();
@@ -837,23 +962,32 @@ export default function Home() {
   const handleSetMeetingPoint = useCallback(() => {
     if (!user) return;
 
+    requestNotificationPermission();
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const label = meetLabel.trim() || "MEET HERE";
-        void set(ref(db, "meetingPoint"), {
+        const event = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           label,
           setBy: displayName,
+          fromEmoji: emoji,
+          uid: user.uid,
           setAt: Date.now(),
-        }).then(() => {
+        };
+
+        void set(ref(db, "meetingPoint"), event).then(async () => {
+          await push(ref(db, "meetingPointEvents"), {
+            ...event,
+            at: serverTimestamp(),
+          });
           setMeetModalOpen(false);
           setMeetLabel("");
         });
       },
       (err) => console.error(err)
     );
-  }, [displayName, meetLabel, user]);
+  }, [displayName, emoji, meetLabel, requestNotificationPermission, user]);
 
   const handleFocusMeetingPoint = useCallback(() => {
     if (!meetingPoint) return;
@@ -1154,15 +1288,6 @@ export default function Home() {
             </div>
 
             <div className="map-floating">
-              <label className="search-box">
-                <span>⌕</span>
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="LOCATE FRIEND"
-                  type="search"
-                />
-              </label>
               <div className="map-tools" aria-label="Map status">
                 <span>{onlineCount} ONLINE</span>
                 <span>{sharing ? "GPS ACTIVE" : "GPS MUTED"}</span>
@@ -1313,18 +1438,6 @@ export default function Home() {
         >
           <span>{sharing ? "◉" : "○"}</span>
           <small>{sharing ? "Live" : "Go live"}</small>
-        </button>
-        <button
-          className={menuOpen ? "active" : ""}
-          type="button"
-          aria-label={menuOpen ? "Close menu" : "Open menu"}
-          onClick={() => {
-            setMenuOpen((value) => !value);
-            setPanelOpen(false);
-          }}
-        >
-          <span>☰</span>
-          <small>Menu</small>
         </button>
       </nav>
     </main>
