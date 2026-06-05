@@ -29,10 +29,10 @@ export const metadata: Metadata = {
     title: "Distortion",
   },
   icons: {
-    icon: [{ url: "/icon-512.png", sizes: "1024x1024", type: "image/png" }],
+    icon: [{ url: "/icon-512.png", sizes: "512x512", type: "image/png" }],
     apple: [{ url: "/apple-touch-icon.png", sizes: "1024x1024", type: "image/png" }],
   },
-  manifest: "/manifest.webmanifest",
+  manifest: "/manifest.json",
 };
 
 export const viewport: Viewport = {
@@ -49,6 +49,9 @@ export default function RootLayout({
       lang="it"
       className={`${anton.variable} ${spaceGrotesk.variable} ${spaceMono.variable}`}
     >
+      <head>
+        <link rel="manifest" href="/manifest.json" />
+      </head>
       <body>{children}</body>
     </html>
   );

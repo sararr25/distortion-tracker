@@ -8,6 +8,7 @@ export type FriendLocation = {
   name: string;
   emoji: string;
   updatedAt: number;
+  battery?: number | null;
 };
 
 export function useLocation(
@@ -36,21 +37,30 @@ export function useLocation(
 
     let latestPosition: GeolocationPosition | null = null;
     let lastPublishedAt = 0;
-    const publishLocation = (pos: GeolocationPosition) => {
+    const publishLocation = async (pos: GeolocationPosition) => {
       const uid = auth.currentUser?.uid;
       if (!uid) return;
 
       lastPublishedAt = Date.now();
+      let battery: number | null = null;
+      if ("getBattery" in navigator) {
+        try {
+          const b = await (navigator as Navigator & { getBattery?: () => Promise<{ level: number }> }).getBattery?.();
+          battery = typeof b?.level === "number" ? Math.round(b.level * 100) : null;
+        } catch {}
+      }
+
       const location = {
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
         name,
         emoji,
         updatedAt: lastPublishedAt,
+        battery,
       };
 
       onSelfUpdate?.(location);
-      set(ref(db, `locations/${uid}`), {
+      void set(ref(db, `locations/${uid}`), {
         ...location,
       });
     };
@@ -59,7 +69,7 @@ export function useLocation(
       (pos) => {
         latestPosition = pos;
         if (lastPublishedAt === 0 || Date.now() - lastPublishedAt >= intervalMs) {
-          publishLocation(pos);
+          void publishLocation(pos);
         }
       },
       (err) => console.error(err),
@@ -71,7 +81,7 @@ export function useLocation(
     );
     const intervalId = window.setInterval(() => {
       if (latestPosition && Date.now() - lastPublishedAt >= intervalMs) {
-        publishLocation(latestPosition);
+        void publishLocation(latestPosition);
       }
     }, intervalMs);
 

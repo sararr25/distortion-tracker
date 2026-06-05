@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { signInWithRedirect, signOut } from "firebase/auth";
-import { get, off, onChildAdded, onDisconnect, onValue, push, ref, remove, runTransaction, serverTimestamp, update } from "firebase/database";
+import { get, off, onChildAdded, onDisconnect, onValue, push, ref, remove, runTransaction, serverTimestamp, set, update } from "firebase/database";
 import { auth, db, provider } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { FriendLocation, useLocation } from "@/hooks/useLocation";
@@ -55,6 +55,16 @@ type FriendSignal = {
   lastSeen: number;
 };
 
+type MeetingPoint = {
+  lat: number;
+  lng: number;
+  label: string;
+  setBy: string;
+  setAt: number;
+};
+
+// Firebase rules reminder: "meetingPoint": { ".read": "auth != null", ".write": "auth != null" }
+
 type WakeLockSentinel = {
   release: () => Promise<void>;
 };
@@ -63,6 +73,11 @@ type NavigatorWithWakeLock = Navigator & {
   wakeLock?: {
     request: (type: "screen") => Promise<WakeLockSentinel>;
   };
+};
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 };
 
 function emojiKey(value: string) {
@@ -106,9 +121,24 @@ function getDistance(lat1: number, lng1: number, lat2: number, lng2: number): nu
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function formatDistance(from: FriendLocation | undefined, to: FriendLocation) {
-  if (!from) return "--";
-  return `${Math.round(getDistance(from.lat, from.lng, to.lat, to.lng))}M`;
+function getSmartDistance(dist: number): string {
+  if (dist < 50) return "👀 QUI VICINO";
+  if (dist < 1000) return `${Math.round(dist)}m away`;
+  return `${(dist / 1000).toFixed(1)}km away`;
+}
+
+function getDistanceColor(dist: number | null): string {
+  if (dist === null) return "#666";
+  if (dist < 50) return "#CCFF00";
+  if (dist < 200) return "#FF6B00";
+  return "#666";
+}
+
+function getFriendStatusColor(updatedAt: number, now: number): string {
+  const age = now - updatedAt;
+  if (age < 2 * 60 * 1000) return "#00FF88";
+  if (age < 5 * 60 * 1000) return "#FFD700";
+  return "#FF4444";
 }
 
 function isFreshLocation(location: FriendLocation | undefined, now: number): location is FriendLocation {
@@ -128,6 +158,7 @@ export default function Home() {
   const sharingToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sharingToastReadyRef = useRef(false);
   const activeFriendTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const installBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flyToRef = useRef<((lat: number, lng: number) => void) | null>(null);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
@@ -156,6 +187,12 @@ export default function Home() {
   const [showSharingToast, setShowSharingToast] = useState(false);
   const [sharingToastMode, setSharingToastMode] = useState<"visible" | "hidden">("visible");
   const [activeFriend, setActiveFriend] = useState<string | null>(null);
+  const [meetingPoint, setMeetingPoint] = useState<MeetingPoint | null>(null);
+  const [meetModalOpen, setMeetModalOpen] = useState(false);
+  const [meetLabel, setMeetLabel] = useState("");
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [installBannerMode, setInstallBannerMode] = useState<"android" | "ios" | null>(null);
 
   const handleUpdate = useCallback((data: Record<string, FriendLocation>) => {
     setLocations(data);
@@ -225,6 +262,55 @@ export default function Home() {
       off(locksRef);
     };
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const meetingRef = ref(db, "meetingPoint");
+    const unsubscribe = onValue(meetingRef, (snapshot) => {
+      setMeetingPoint((snapshot.val() ?? null) as MeetingPoint | null);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [user]);
+
+  useEffect(() => {
+    const isDismissed = window.localStorage.getItem("pwa_banner_dismissed") === "true";
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent ?? "");
+    const isInStandaloneMode =
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true ||
+      window.matchMedia("(display-mode: standalone)").matches;
+
+    if (isDismissed || isInStandaloneMode) return;
+
+    const scheduleBanner = (mode: "android" | "ios") => {
+      if (installBannerTimeoutRef.current) clearTimeout(installBannerTimeoutRef.current);
+      installBannerTimeoutRef.current = setTimeout(() => {
+        setInstallBannerMode(mode);
+        setShowInstallBanner(true);
+      }, 30000);
+    };
+
+    const handler = (event: Event) => {
+      const promptEvent = event as BeforeInstallPromptEvent;
+      promptEvent.preventDefault();
+      setInstallPrompt(promptEvent);
+      scheduleBanner("android");
+    };
+
+    window.addEventListener("beforeinstallprompt", handler);
+    if (isIOS) scheduleBanner("ios");
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handler);
+      if (installBannerTimeoutRef.current) {
+        clearTimeout(installBannerTimeoutRef.current);
+        installBannerTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const isEmojiLocked = useCallback((item: string) => {
     const owner = emojiLocks[emojiKey(item)];
@@ -348,6 +434,9 @@ export default function Home() {
       }
       if (activeFriendTimeoutRef.current) {
         clearTimeout(activeFriendTimeoutRef.current);
+      }
+      if (installBannerTimeoutRef.current) {
+        clearTimeout(installBannerTimeoutRef.current);
       }
     };
   }, []);
@@ -678,6 +767,44 @@ export default function Home() {
     );
   }, []);
 
+  const handleSetMeetingPoint = useCallback(() => {
+    if (!user) return;
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const label = meetLabel.trim() || "MEET HERE";
+        void set(ref(db, "meetingPoint"), {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          label,
+          setBy: displayName,
+          setAt: Date.now(),
+        }).then(() => {
+          setMeetModalOpen(false);
+          setMeetLabel("");
+        });
+      },
+      (err) => console.error(err)
+    );
+  }, [displayName, meetLabel, user]);
+
+  const handleFocusMeetingPoint = useCallback(() => {
+    if (!meetingPoint) return;
+    flyToRef.current?.(meetingPoint.lat, meetingPoint.lng);
+  }, [meetingPoint]);
+
+  const handleDismissInstallBanner = useCallback(() => {
+    window.localStorage.setItem("pwa_banner_dismissed", "true");
+    setShowInstallBanner(false);
+  }, []);
+
+  const handleInstall = useCallback(async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === "accepted") setShowInstallBanner(false);
+  }, [installPrompt]);
+
   const handleCloseOnboarding = useCallback(() => {
     window.localStorage.setItem("distortion_onboarded", "true");
     setShowOnboarding(false);
@@ -805,6 +932,15 @@ export default function Home() {
         />
       )}
 
+      {meetModalOpen && (
+        <MeetHereModal
+          label={meetLabel}
+          onLabelChange={setMeetLabel}
+          onCancel={() => setMeetModalOpen(false)}
+          onSetPoint={handleSetMeetingPoint}
+        />
+      )}
+
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div className="noise-layer" />
@@ -820,6 +956,13 @@ export default function Home() {
           }}
         >
           ☰
+        </button>
+        <button
+          className="meet-top-button mobile-only"
+          type="button"
+          onClick={() => setMeetModalOpen(true)}
+        >
+          📍 MEET
         </button>
         <div className="brand-lockup">
           <span>DISTORTION</span>
@@ -853,6 +996,14 @@ export default function Home() {
         </div>
       )}
 
+      {showInstallBanner && installBannerMode && (
+        <PwaInstallBanner
+          isIOS={installBannerMode === "ios" && !installPrompt}
+          onDismiss={handleDismissInstallBanner}
+          onInstall={handleInstall}
+        />
+      )}
+
       <div className="workspace">
         <section className="map-stage" id="map" aria-label="Mappa live">
           <div className="map-frame">
@@ -860,6 +1011,7 @@ export default function Home() {
               locations={effectiveLocations}
               currentUid={user.uid}
               mapStyle={mapStyle}
+              meetingPoint={meetingPoint}
               onMapReady={handleMapReady}
               focusedLocation={focusedLocation}
             />
@@ -936,7 +1088,9 @@ export default function Home() {
             tick={tick}
             now={now}
             activeFriend={activeFriend}
+            meetingPoint={meetingPoint}
             onFocusFriend={handleRadarFriendFocus}
+            onFocusMeetingPoint={handleFocusMeetingPoint}
             onToggleOpen={() => setPanelOpen((value) => !value)}
           />
         </section>
@@ -1101,6 +1255,86 @@ function OnboardingOverlay({
   );
 }
 
+function MeetHereModal({
+  label,
+  onLabelChange,
+  onCancel,
+  onSetPoint,
+}: {
+  label: string;
+  onLabelChange: (value: string) => void;
+  onCancel: () => void;
+  onSetPoint: () => void;
+}) {
+  return (
+    <div className="meet-modal-backdrop" role="presentation">
+      <section className="meet-modal" role="dialog" aria-modal="true" aria-labelledby="meet-modal-title">
+        <h2 id="meet-modal-title">SET MEETING POINT</h2>
+        <input
+          value={label}
+          onChange={(event) => onLabelChange(event.target.value)}
+          placeholder="e.g. RAVE STAGE ENTRANCE"
+          maxLength={30}
+          type="text"
+        />
+        <p>Sets your current GPS position as the meeting point for everyone</p>
+        <div className="meet-modal-actions">
+          <button className="cancel" type="button" onClick={onCancel}>
+            CANCEL
+          </button>
+          <button className="set" type="button" onClick={onSetPoint}>
+            SET POINT ⚡
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PwaInstallBanner({
+  isIOS,
+  onDismiss,
+  onInstall,
+}: {
+  isIOS: boolean;
+  onDismiss: () => void;
+  onInstall: () => void;
+}) {
+  return (
+    <div style={{
+      position: "fixed", bottom: "5rem", left: "1rem", right: "1rem",
+      background: "#0a0a0a", border: "1px solid #CCFF00", borderRadius: "8px",
+      padding: "0.75rem 1rem", zIndex: 2000,
+      display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem"
+    }}>
+      <div>
+        <div style={{ color: "#CCFF00", fontFamily: "monospace", fontWeight: 900, fontSize: "0.8rem" }}>
+          ⚡ ADD TO HOME SCREEN
+        </div>
+        <div style={{ color: "#666", fontFamily: "monospace", fontSize: "0.65rem", marginTop: "2px" }}>
+          {isIOS ? "Tap Share → Add to Home Screen" : "Works better as an app"}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: "0.5rem" }}>
+        <button onClick={onDismiss} type="button" style={{
+          minHeight: "44px", minWidth: "44px",
+          background: "none", border: "1px solid #333", color: "#666",
+          fontFamily: "monospace", fontSize: "0.7rem", padding: "0.4rem 0.6rem",
+          borderRadius: "4px", cursor: "pointer"
+        }}>✕</button>
+        {!isIOS && (
+          <button onClick={onInstall} type="button" style={{
+            minHeight: "44px",
+            background: "#CCFF00", border: "none", color: "#000",
+            fontFamily: "monospace", fontWeight: 900, fontSize: "0.7rem",
+            padding: "0.4rem 0.8rem", borderRadius: "4px", cursor: "pointer"
+          }}>INSTALL</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function GpsModeControl({
   gpsInterval,
   onGpsIntervalChange,
@@ -1254,28 +1488,43 @@ function CommandCenter({
         {friends.length === 0 ? (
           <div className="empty-state">NO FRIENDS ONLINE</div>
         ) : (
-          friends.map(([uid, friend]) => (
-            <button
-              className="friend-row"
-              key={uid}
-              type="button"
-              aria-disabled={!friend.location}
-              title={friend.location ? undefined : "GPS non condiviso"}
-              onClick={() => {
-                if (friend.location) onFocusFriend(friend.location);
-              }}
-            >
-              <div>
-                <span className="friend-beacon" />
-                <strong>{friend.emoji} {friend.name.split(" ")[0]}</strong>
-                <small className="friend-stage">
-                  {friend.location ? getNearestStage(friend.location.lat, friend.location.lng) : "ONLINE"}
-                </small>
-                <small>{friend.location ? `${formatDistance(currentLocation, friend.location)} AWAY` : "GPS MUTED"}</small>
-              </div>
-              <time>{friend.location ? formatAge(friend.location.updatedAt, now) : "ONLINE"}</time>
-            </button>
-          ))
+          friends.map(([uid, friend]) => {
+            const distance = currentLocation && friend.location
+              ? getDistance(currentLocation.lat, currentLocation.lng, friend.location.lat, friend.location.lng)
+              : null;
+            const battery = friend.location?.battery;
+
+            return (
+              <button
+                className="friend-row"
+                key={uid}
+                type="button"
+                aria-disabled={!friend.location}
+                title={friend.location ? undefined : "GPS non condiviso"}
+                onClick={() => {
+                  if (friend.location) onFocusFriend(friend.location);
+                }}
+              >
+                <div>
+                  <span
+                    className="friend-beacon"
+                    style={{ background: getFriendStatusColor(friend.location?.updatedAt ?? friend.updatedAt, now) }}
+                  />
+                  <strong>{friend.emoji} {friend.name.split(" ")[0]}</strong>
+                  <small className="friend-stage">
+                    {friend.location ? getNearestStage(friend.location.lat, friend.location.lng) : "ONLINE"}
+                  </small>
+                  <small style={{ color: getDistanceColor(distance) }}>
+                    {distance === null ? "— away" : getSmartDistance(distance)}
+                  </small>
+                  {typeof battery === "number" && battery < 20 && (
+                    <small style={{ color: "#FF4444" }}>🪫 {battery}%</small>
+                  )}
+                </div>
+                <time>{friend.location ? formatAge(friend.location.updatedAt, now) : "ONLINE"}</time>
+              </button>
+            );
+          })
         )}
       </section>
 
@@ -1511,7 +1760,9 @@ function MobileRadar({
   tick,
   now,
   activeFriend,
+  meetingPoint,
   onFocusFriend,
+  onFocusMeetingPoint,
   onToggleOpen,
 }: {
   currentLocation?: FriendLocation;
@@ -1520,7 +1771,9 @@ function MobileRadar({
   tick: number;
   now: number;
   activeFriend: string | null;
+  meetingPoint: MeetingPoint | null;
   onFocusFriend: (uid: string, friend: FriendLocation) => void;
+  onFocusMeetingPoint: () => void;
   onToggleOpen: () => void;
 }) {
   return (
@@ -1539,6 +1792,11 @@ function MobileRadar({
         <p>{friends.length} connected</p>
       </div>
       <span hidden>{tick}</span>
+      {meetingPoint && (
+        <button className="meet-radar-banner" type="button" onClick={onFocusMeetingPoint}>
+          📍 MEET: {meetingPoint.label} — set by {meetingPoint.setBy}
+        </button>
+      )}
       <div className="mobile-friends">
         {friends.length === 0 ? (
           <div className="mobile-empty">NO FRIENDS ONLINE</div>
@@ -1546,6 +1804,11 @@ function MobileRadar({
           friends.map(([uid, friend]) => {
             const updatedAt = friend.location?.updatedAt ?? friend.updatedAt;
             const diffMin = Math.floor((now - updatedAt) / 60000);
+            const distance = currentLocation && friend.location
+              ? getDistance(currentLocation.lat, currentLocation.lng, friend.location.lat, friend.location.lng)
+              : null;
+            const distanceText = distance === null ? "— away" : getSmartDistance(distance);
+            const battery = friend.location?.battery;
 
             return (
               <button
@@ -1561,8 +1824,34 @@ function MobileRadar({
                   if (friend.location) onFocusFriend(uid, friend.location);
                 }}
               >
-                <div>{friend.emoji}</div>
-                <span>{friend.name.split(" ")[0]} · {friend.location ? formatDistance(currentLocation, friend.location) : "ONLINE"}</span>
+                <div className="mobile-friend-avatar">
+                  {friend.emoji}
+                  <span
+                    className="friend-status-dot"
+                    style={{ background: getFriendStatusColor(updatedAt, now) }}
+                  />
+                </div>
+                <span>{friend.name.split(" ")[0]}</span>
+                <small
+                  style={{
+                    fontFamily: "monospace",
+                    fontSize: "0.7rem",
+                    color: getDistanceColor(distance),
+                  }}
+                >
+                  {distanceText}
+                </small>
+                {typeof battery === "number" && battery < 20 && (
+                  <small
+                    style={{
+                      color: "#FF4444",
+                      fontFamily: "monospace",
+                      fontSize: "0.65rem",
+                    }}
+                  >
+                    🪫 {battery}%
+                  </small>
+                )}
                 <small
                   style={{
                     fontFamily: "monospace",

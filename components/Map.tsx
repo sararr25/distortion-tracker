@@ -5,11 +5,17 @@ import type { Map as LeafletMap, Marker, TileLayer } from "leaflet";
 import type { FriendLocation } from "@/hooks/useLocation";
 
 type MapStyle = "dark" | "light" | "satellite";
+type MeetingPointMarker = {
+  lat: number;
+  lng: number;
+  label: string;
+};
 
 type Props = {
   locations: Record<string, FriendLocation>;
   currentUid: string;
   mapStyle: MapStyle;
+  meetingPoint: MeetingPointMarker | null;
   onMapReady?: (flyTo: (lat: number, lng: number) => void) => void;
   focusedLocation?: {
     lat: number;
@@ -132,9 +138,10 @@ function iconAssetUrl(fileName: string) {
   return `/icons-zone/${encodeURIComponent(fileName)}`;
 }
 
-export default function Map({ locations, currentUid, mapStyle, onMapReady, focusedLocation }: Props) {
+export default function Map({ locations, currentUid, mapStyle, meetingPoint, onMapReady, focusedLocation }: Props) {
   const mapRef = useRef<{ map: LeafletMap; L: LeafletModule } | null>(null);
   const markersRef = useRef<Record<string, Marker>>({});
+  const meetingMarkerRef = useRef<Marker | null>(null);
   const labelMarkersRef = useRef<{ marker: Marker; zone: typeof FESTIVAL_ZONES[number] }[]>([]);
   const poiMarkersRef = useRef<{ marker: Marker; poi: typeof POIS[number] }[]>([]);
   const tileLayerRef = useRef<TileLayer | null>(null);
@@ -330,6 +337,7 @@ export default function Map({ locations, currentUid, mapStyle, onMapReady, focus
         container.replaceChildren();
       }
       markersRef.current = {};
+      meetingMarkerRef.current = null;
       labelMarkersRef.current = [];
       poiMarkersRef.current = [];
       tileLayerRef.current = null;
@@ -418,6 +426,58 @@ export default function Map({ locations, currentUid, mapStyle, onMapReady, focus
       duration: 0.75,
     });
   }, [focusedLocation, ready]);
+
+  useEffect(() => {
+    if (!mapRef.current || !ready) return;
+    const { map, L } = mapRef.current;
+
+    if (meetingMarkerRef.current) {
+      meetingMarkerRef.current.removeFrom(map);
+      meetingMarkerRef.current = null;
+    }
+
+    if (!meetingPoint) return;
+
+    const label = escapeHtml(meetingPoint.label);
+    const icon = L.divIcon({
+      className: "",
+      html: `<div style="
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+">
+  <div style="
+    background: #00FF88;
+    color: #000;
+    font-family: monospace;
+    font-size: 10px;
+    font-weight: 900;
+    padding: 3px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+    animation: meetPulse 1.2s ease-in-out infinite;
+    letter-spacing: 0.1em;
+    margin-bottom: 4px;
+  ">📍 ${label}</div>
+  <div style="
+    width: 14px;
+    height: 14px;
+    background: #00FF88;
+    border-radius: 50%;
+    box-shadow: 0 0 0 0 #00FF88;
+    animation: meetPing 1.2s ease-in-out infinite;
+  "></div>
+</div>`,
+      iconSize: [140, 42],
+      iconAnchor: [70, 38],
+    });
+
+    meetingMarkerRef.current = L.marker([meetingPoint.lat, meetingPoint.lng], {
+      icon,
+      interactive: false,
+    }).addTo(map);
+  }, [meetingPoint, ready]);
 
   return (
     <div
