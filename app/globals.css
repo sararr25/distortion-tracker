@@ -475,6 +475,55 @@ button {
   letter-spacing: 0.04em;
 }
 
+.meet-alert-confirmed {
+  display: grid;
+  gap: 0.45rem;
+  border: 1px solid rgba(204, 255, 0, 0.54);
+  background: rgba(204, 255, 0, 0.1);
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.meet-alert-confirmed span {
+  color: #ccff00;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.meet-alert-confirmed h3 {
+  margin: 0;
+  color: #ffffff;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.meet-alert-confirmed p {
+  margin: 0;
+  color: #c4c9ac;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+}
+
+.meet-alert-view-position {
+  min-height: 48px;
+  margin-top: 0.15rem;
+  border-radius: 4px;
+  background: #ccff00;
+  color: #111600;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
 .meet-alert-current {
   margin: 0;
   border: 1px solid rgba(125, 244, 255, 0.28);

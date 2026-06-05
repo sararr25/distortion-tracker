@@ -688,20 +688,12 @@ export default function Home() {
       setMeetResponseFeedback(isMeetResponseStatus(previousStatus) ? "Response updated" : "Response sent");
       if (meetResponseFeedbackTimeoutRef.current) {
         window.clearTimeout(meetResponseFeedbackTimeoutRef.current);
-      }
-      meetResponseFeedbackTimeoutRef.current = window.setTimeout(() => {
-        setMeetResponseFeedback("");
         meetResponseFeedbackTimeoutRef.current = null;
-      }, 1500);
-
+      }
       if (meetAlertTimeoutRef.current) {
         window.clearTimeout(meetAlertTimeoutRef.current);
-      }
-      meetAlertTimeoutRef.current = window.setTimeout(() => {
-        setMeetAlert((current) => current?.id === request.id ? null : current);
-        setMeetResponseFeedback("");
         meetAlertTimeoutRef.current = null;
-      }, 1500);
+      }
     } catch (error) {
       console.error("Failed to send Meet RSVP:", error);
       showMeetToast(isPermissionDeniedError(error) ? "Firebase permissions blocked RSVP" : "Response failed", "error");
@@ -1914,7 +1906,10 @@ export default function Home() {
           responseFeedback={meetResponseFeedback}
           submittingStatus={meetResponseSending}
           onClose={dismissMeetAlert}
-          onFocusMeetingPoint={() => focusMeetRequest(meetAlert)}
+          onFocusMeetingPoint={() => {
+            focusMeetRequest(meetAlert);
+            dismissMeetAlert();
+          }}
           onRespond={(status) => void handleMeetResponse(meetAlert, status)}
         />
       )}
@@ -2378,6 +2373,10 @@ function MeetRequestOverlay({
   const currentResponse = request.responses?.[currentUid];
   const currentStatus = isMeetResponseStatus(currentResponse?.status) ? currentResponse.status : null;
   const currentLabel = currentStatus ? currentResponse?.label || MEET_RESPONSE_LABELS[currentStatus] : "";
+  const senderFirstName = getFirstName(request.fromName);
+  const confirmationTitle = currentStatus === "coming"
+    ? `Go find ${senderFirstName}`
+    : `${senderFirstName} got your RSVP`;
 
   return (
     <div className="meet-alert-backdrop" role="dialog" aria-modal="true" aria-labelledby="meet-alert-title">
@@ -2389,6 +2388,18 @@ function MeetRequestOverlay({
         <p className="meet-alert-kicker">MEET REQUEST</p>
         <h2 id="meet-alert-title">{request.fromName} wants to meet</h2>
         <p className="meet-alert-message">{request.message}</p>
+        {responseFeedback && currentStatus && (
+          <div className="meet-alert-confirmed">
+            <span>{responseFeedback}</span>
+            <h3>{confirmationTitle}</h3>
+            <p>Jump to the meeting point on the map.</p>
+            {hasCoordinates && (
+              <button className="meet-alert-view-position" type="button" onClick={onFocusMeetingPoint}>
+                View position
+              </button>
+            )}
+          </div>
+        )}
         {currentLabel && (
           <p className="meet-alert-current">
             Current response <strong>{currentLabel}</strong>
@@ -2414,8 +2425,7 @@ function MeetRequestOverlay({
             {MEET_RESPONSE_LABELS.notComing}
           </button>
         </div>
-        {responseFeedback && <p className="meet-alert-feedback">{responseFeedback}</p>}
-        {hasCoordinates && (
+        {hasCoordinates && !responseFeedback && (
           <button className="meet-alert-focus" type="button" onClick={onFocusMeetingPoint}>
             Show meeting point
           </button>
