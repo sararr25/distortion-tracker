@@ -15,6 +15,7 @@ export function useLocation(
   active: boolean,
   emoji: string,
   intervalMs: number,
+  displayName: string,
   onUpdate: (locations: Record<string, FriendLocation>) => void
 ) {
   useEffect(() => {
@@ -44,7 +45,7 @@ export function useLocation(
             void set(ref(db, `locations/${uid}`), {
               lat: pos.coords.latitude,
               lng: pos.coords.longitude,
-              name: auth.currentUser?.displayName ?? "Anonymous",
+              name: displayName || auth.currentUser?.displayName || "Anonymous",
               emoji,
               updatedAt: Date.now(),
               ...(battery === undefined ? {} : { battery }),
@@ -74,5 +75,5 @@ export function useLocation(
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [active, emoji, intervalMs]);
+  }, [active, displayName, emoji, intervalMs]);
 }

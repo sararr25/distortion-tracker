@@ -47,6 +47,12 @@ type FriendProfile = {
   lastSeen?: number;
 };
 
+type UserProfile = {
+  displayName?: string;
+  emoji?: string;
+  updatedAt?: number;
+};
+
 type FriendSignal = {
   name: string;
   emoji: string;
@@ -83,6 +89,7 @@ type BeforeInstallPromptEvent = Event & {
 
 type GpsInterval = 3000 | 60000 | 300000;
 type ActiveScreen = "map" | "lineup";
+type SaveStatus = "idle" | "saving" | "saved";
 
 function emojiKey(value: string) {
   return encodeURIComponent(value);
@@ -164,6 +171,7 @@ export default function Home() {
   const sharingToastReadyRef = useRef(false);
   const activeFriendTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const installBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flyToRef = useRef<((lat: number, lng: number) => void) | null>(null);
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
@@ -198,6 +206,7 @@ export default function Home() {
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [installBannerMode, setInstallBannerMode] = useState<"android" | "ios" | null>(null);
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>("map");
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
 
   const handleUpdate = useCallback((data: Record<string, FriendLocation>) => {
     setLocations(data);
@@ -220,8 +229,13 @@ export default function Home() {
   }, []);
 
   const displayName = profileName.trim() || user?.displayName || "Anonymous";
+  const isIOS = typeof navigator !== "undefined" && /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isInStandaloneMode =
+    typeof window !== "undefined" &&
+    (((window.navigator as Navigator & { standalone?: boolean }).standalone === true) ||
+      window.matchMedia("(display-mode: standalone)").matches);
 
-  useLocation(Boolean(user && sharing), emoji, gpsInterval, handleUpdate);
+  useLocation(Boolean(user && sharing), emoji, gpsInterval, displayName, handleUpdate);
 
   useEffect(() => {
     if (!user) return;
@@ -241,14 +255,40 @@ export default function Home() {
   useEffect(() => {
     if (!user || profilesLoadedUid !== user.uid || profileHydratedUid === user.uid) return;
 
-    const timeout = window.setTimeout(() => {
-      const profile = profiles[user.uid];
-      setProfileName(profile?.name ?? window.localStorage.getItem(`dt-profile-name-${user.uid}`) ?? user.displayName ?? "Anonymous");
-      setEmoji(profile?.emoji ?? window.localStorage.getItem(`dt-profile-emoji-${user.uid}`) ?? "🔥");
-      setProfileHydratedUid(user.uid);
-    }, 0);
+    let cancelled = false;
 
-    return () => window.clearTimeout(timeout);
+    const loadProfile = async () => {
+      const profile = profiles[user.uid];
+      const userProfileSnapshot = await get(ref(db, `userProfiles/${user.uid}`)).catch((error) => {
+        console.error("Failed to load user profile:", error);
+        return null;
+      });
+      const userProfile = userProfileSnapshot?.exists() ? userProfileSnapshot.val() as UserProfile : null;
+
+      if (cancelled) return;
+
+      const savedName =
+        userProfile?.displayName?.trim() ||
+        profile?.name?.trim() ||
+        window.localStorage.getItem(`dt-profile-name-${user.uid}`) ||
+        user.displayName ||
+        "Anonymous";
+      const savedEmoji =
+        userProfile?.emoji ||
+        profile?.emoji ||
+        window.localStorage.getItem(`dt-profile-emoji-${user.uid}`) ||
+        "🔥";
+
+      setProfileName(savedName.slice(0, 20));
+      setEmoji(savedEmoji);
+      setProfileHydratedUid(user.uid);
+    };
+
+    void loadProfile();
+
+    return () => {
+      cancelled = true;
+    };
   }, [profileHydratedUid, profiles, profilesLoadedUid, user]);
 
   useEffect(() => {
@@ -445,6 +485,9 @@ export default function Home() {
       }
       if (installBannerTimeoutRef.current) {
         clearTimeout(installBannerTimeoutRef.current);
+      }
+      if (saveStatusTimeoutRef.current) {
+        clearTimeout(saveStatusTimeoutRef.current);
       }
     };
   }, []);
@@ -862,14 +905,35 @@ export default function Home() {
   const handleSaveProfile = useCallback(async () => {
     if (!user) return;
 
-    const savedName = displayName;
-    window.localStorage.setItem(`dt-profile-name-${user.uid}`, savedName);
-    window.localStorage.setItem(`dt-profile-emoji-${user.uid}`, emoji);
-    await update(ref(db, `profiles/${user.uid}`), {
-      name: savedName,
-      emoji,
-      updatedAt: serverTimestamp(),
-    });
+    const savedName = displayName.slice(0, 20);
+    setSaveStatus("saving");
+
+    try {
+      await set(ref(db, `userProfiles/${user.uid}`), {
+        emoji,
+        displayName: savedName,
+        updatedAt: Date.now(),
+      });
+      await update(ref(db, `profiles/${user.uid}`), {
+        name: savedName,
+        emoji,
+        updatedAt: serverTimestamp(),
+      });
+
+      setProfileName(savedName);
+      window.localStorage.setItem(`dt-profile-name-${user.uid}`, savedName);
+      window.localStorage.setItem(`dt-profile-emoji-${user.uid}`, emoji);
+      setSaveStatus("saved");
+
+      if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
+      saveStatusTimeoutRef.current = setTimeout(() => {
+        setSaveStatus("idle");
+        saveStatusTimeoutRef.current = null;
+      }, 2000);
+    } catch (error) {
+      console.error("Failed to save profile:", error);
+      setSaveStatus("idle");
+    }
   }, [displayName, emoji, user]);
 
   if (loading) {
@@ -883,6 +947,15 @@ export default function Home() {
 
   if (!user) {
     return <LoginScreen authError={authError} onLogin={handleLogin} />;
+  }
+
+  if (profileHydratedUid !== user.uid) {
+    return (
+      <main className="loading-screen">
+        <div className="strobe" />
+        <p>LOADING PROFILE</p>
+      </main>
+    );
   }
 
   return (
@@ -1146,11 +1219,16 @@ export default function Home() {
             profileName={profileName}
             userName={displayName}
             userEmail={user.email ?? "No email"}
+            saveStatus={saveStatus}
+            installAvailable={Boolean(installPrompt)}
+            isIOS={isIOS}
+            isInStandaloneMode={isInStandaloneMode}
             onLogout={handleLogout}
             onGpsIntervalChange={handleGpsIntervalChange}
-            onNameChange={setProfileName}
+            onNameChange={(name) => setProfileName(name.slice(0, 20))}
             onEmojiChange={handleEmojiChange}
             onSaveProfile={handleSaveProfile}
+            onInstall={handleInstall}
             onFocusFriend={handleFocusFriend}
             onSendPulse={handleOpenPulseChooser}
             isEmojiLocked={isEmojiLocked}
@@ -1166,12 +1244,17 @@ export default function Home() {
         displayName={displayName}
         profileName={profileName}
         userEmail={user.email ?? "No email"}
+        saveStatus={saveStatus}
+        installAvailable={Boolean(installPrompt)}
+        isIOS={isIOS}
+        isInStandaloneMode={isInStandaloneMode}
         onClose={() => setMenuOpen(false)}
         onEmojiChange={handleEmojiChange}
         onGpsIntervalChange={handleGpsIntervalChange}
         onLogout={handleLogout}
-        onNameChange={setProfileName}
+        onNameChange={(name) => setProfileName(name.slice(0, 20))}
         onSaveProfile={handleSaveProfile}
+        onInstall={handleInstall}
         isEmojiLocked={isEmojiLocked}
       />
 
@@ -1437,6 +1520,39 @@ function GpsModeControl({
   );
 }
 
+function InstallAppSection({
+  installAvailable,
+  isIOS,
+  isInStandaloneMode,
+  onInstall,
+}: {
+  installAvailable: boolean;
+  isIOS: boolean;
+  isInStandaloneMode: boolean;
+  onInstall: () => void | Promise<void>;
+}) {
+  return (
+    <div className="install-section">
+      <p className="panel-label">INSTALL APP</p>
+      {installAvailable ? (
+        <button className="install-app-button" type="button" onClick={() => void onInstall()}>
+          ⚡ ADD TO HOME SCREEN
+        </button>
+      ) : isIOS && !isInStandaloneMode ? (
+        <div className="install-note">
+          <p>
+            Tap <strong>Share ↑</strong> in Safari then <strong>&quot;Add to Home Screen&quot;</strong> to install the app
+          </p>
+        </div>
+      ) : isInStandaloneMode ? (
+        <p className="install-installed">✓ APP ALREADY INSTALLED</p>
+      ) : (
+        <p className="install-unavailable">Open in Chrome or Safari to install</p>
+      )}
+    </div>
+  );
+}
+
 function CommandCenter({
   currentLocation,
   friends,
@@ -1447,11 +1563,16 @@ function CommandCenter({
   profileName,
   userName,
   userEmail,
+  saveStatus,
+  installAvailable,
+  isIOS,
+  isInStandaloneMode,
   onLogout,
   onGpsIntervalChange,
   onNameChange,
   onEmojiChange,
   onSaveProfile,
+  onInstall,
   onFocusFriend,
   onSendPulse,
   isEmojiLocked,
@@ -1465,11 +1586,16 @@ function CommandCenter({
   profileName: string;
   userName: string;
   userEmail: string;
+  saveStatus: SaveStatus;
+  installAvailable: boolean;
+  isIOS: boolean;
+  isInStandaloneMode: boolean;
   onLogout: () => void;
   onGpsIntervalChange: (interval: GpsInterval) => void;
   onNameChange: (name: string) => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
   onSaveProfile: () => void | Promise<void>;
+  onInstall: () => void | Promise<void>;
   onFocusFriend: (friend: FriendLocation) => void;
   onSendPulse: () => void;
   isEmojiLocked: (emoji: string) => boolean;
@@ -1496,8 +1622,9 @@ function CommandCenter({
           <span>DISPLAY NAME</span>
           <input
             value={profileName}
-            onChange={(event) => onNameChange(event.target.value)}
-            maxLength={24}
+            onChange={(event) => onNameChange(event.target.value.slice(0, 20))}
+            maxLength={20}
+            placeholder="Your name"
             type="text"
           />
         </label>
@@ -1509,9 +1636,6 @@ function CommandCenter({
           <span>LAST GPS</span>
           <strong>{currentLocation ? `${formatAge(currentLocation.updatedAt, now)} AGO` : "WAITING"}</strong>
         </div>
-        <button className="profile-save-button" type="button" onClick={() => void onSaveProfile()}>
-          SAVE PROFILE
-        </button>
       </section>
 
       <section className="panel-block">
@@ -1535,6 +1659,14 @@ function CommandCenter({
             </button>
           ))}
         </div>
+        <button
+          className={saveStatus === "saved" ? "profile-save-button saved" : "profile-save-button"}
+          type="button"
+          disabled={saveStatus === "saving"}
+          onClick={() => void onSaveProfile()}
+        >
+          {saveStatus === "saving" ? "SAVING..." : saveStatus === "saved" ? "✓ SAVED" : "SAVE PROFILE"}
+        </button>
       </section>
 
       <section className="panel-block friend-list">
@@ -1580,6 +1712,15 @@ function CommandCenter({
             );
           })
         )}
+      </section>
+
+      <section className="panel-block">
+        <InstallAppSection
+          installAvailable={installAvailable}
+          isIOS={isIOS}
+          isInStandaloneMode={isInStandaloneMode}
+          onInstall={onInstall}
+        />
       </section>
 
       <button className="logout-button" type="button" onClick={onLogout}>
@@ -1665,12 +1806,17 @@ function MobileMenu({
   displayName,
   profileName,
   userEmail,
+  saveStatus,
+  installAvailable,
+  isIOS,
+  isInStandaloneMode,
   onClose,
   onEmojiChange,
   onGpsIntervalChange,
   onLogout,
   onNameChange,
   onSaveProfile,
+  onInstall,
   isEmojiLocked,
 }: {
   open: boolean;
@@ -1680,23 +1826,26 @@ function MobileMenu({
   displayName: string;
   profileName: string;
   userEmail: string;
+  saveStatus: SaveStatus;
+  installAvailable: boolean;
+  isIOS: boolean;
+  isInStandaloneMode: boolean;
   onClose: () => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
   onGpsIntervalChange: (interval: GpsInterval) => void;
   onLogout: () => void;
   onNameChange: (name: string) => void;
   onSaveProfile: () => void | Promise<void>;
+  onInstall: () => void | Promise<void>;
   isEmojiLocked: (emoji: string) => boolean;
 }) {
   const [view, setView] = useState<"menu" | "profile" | "settings">("menu");
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
   useEffect(() => {
     if (!open) return;
 
     const timeout = window.setTimeout(() => {
       setView("menu");
-      setSaveState("idle");
     }, 0);
 
     return () => window.clearTimeout(timeout);
@@ -1704,14 +1853,6 @@ function MobileMenu({
 
   const handleBack = () => {
     setView("menu");
-    setSaveState("idle");
-  };
-
-  const handleSave = async () => {
-    setSaveState("saving");
-    await onSaveProfile();
-    setSaveState("saved");
-    window.setTimeout(() => setSaveState("idle"), 1600);
   };
 
   return (
@@ -1766,10 +1907,10 @@ function MobileMenu({
             <input
               value={profileName}
               onChange={(event) => {
-                onNameChange(event.target.value);
-                setSaveState("idle");
+                onNameChange(event.target.value.slice(0, 20));
               }}
-              maxLength={24}
+              maxLength={20}
+              placeholder="Your name"
               type="text"
             />
           </label>
@@ -1784,7 +1925,6 @@ function MobileMenu({
                 disabled={isEmojiLocked(item)}
                 title={isEmojiLocked(item) ? "Already chosen" : undefined}
                 onClick={() => {
-                  setSaveState("idle");
                   void onEmojiChange(item);
                 }}
               >
@@ -1792,8 +1932,13 @@ function MobileMenu({
               </button>
             ))}
           </div>
-          <button className="profile-save-button" type="button" onClick={() => void handleSave()}>
-            {saveState === "saving" ? "SAVING..." : saveState === "saved" ? "SAVED" : "SAVE PROFILE"}
+          <button
+            className={saveStatus === "saved" ? "profile-save-button saved" : "profile-save-button"}
+            type="button"
+            disabled={saveStatus === "saving"}
+            onClick={() => void onSaveProfile()}
+          >
+            {saveStatus === "saving" ? "SAVING..." : saveStatus === "saved" ? "✓ SAVED" : "SAVE PROFILE"}
           </button>
         </section>
       )}
@@ -1801,6 +1946,12 @@ function MobileMenu({
       {view === "settings" && (
         <section className="mobile-menu-section">
           <GpsModeControl gpsInterval={gpsInterval} onGpsIntervalChange={onGpsIntervalChange} />
+          <InstallAppSection
+            installAvailable={installAvailable}
+            isIOS={isIOS}
+            isInStandaloneMode={isInStandaloneMode}
+            onInstall={onInstall}
+          />
         </section>
       )}
     </aside>

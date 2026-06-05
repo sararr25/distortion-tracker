@@ -1147,6 +1147,71 @@ button {
   text-transform: uppercase;
 }
 
+.profile-save-button.saved {
+  border-color: #00ff88;
+  background: #00ff88;
+}
+
+.profile-save-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.install-section {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.install-section .panel-label {
+  margin-bottom: 0;
+}
+
+.install-app-button {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid #ccff00;
+  border-radius: 6px;
+  background: transparent;
+  color: #ccff00;
+  padding: 0.85rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.85rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.install-note {
+  border: 1px solid #333333;
+  border-radius: 6px;
+  background: #1a1a1a;
+  padding: 0.75rem 1rem;
+}
+
+.install-note p,
+.install-installed,
+.install-unavailable {
+  margin: 0;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.install-note p {
+  color: #aaaaaa;
+}
+
+.install-note strong {
+  color: #ccff00;
+}
+
+.install-installed {
+  color: #00ff88;
+}
+
+.install-unavailable {
+  color: #444444;
+}
+
 .marker-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
