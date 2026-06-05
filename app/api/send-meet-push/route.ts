@@ -32,6 +32,22 @@ function isValidPayload(payload: unknown): payload is MeetPushPayload {
   );
 }
 
+function methodNotAllowed() {
+  return NextResponse.json({ success: false, error: "Method not allowed" }, { status: 405 });
+}
+
+export function GET() {
+  return methodNotAllowed();
+}
+
+export function PUT() {
+  return methodNotAllowed();
+}
+
+export function DELETE() {
+  return methodNotAllowed();
+}
+
 export async function POST(request: NextRequest) {
   let payload: unknown;
 

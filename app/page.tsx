@@ -244,6 +244,8 @@ export default function Home() {
   const installBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const alertAudioRef = useRef<HTMLAudioElement | null>(null);
+  const alertAudioLoadFailedRef = useRef(false);
   const audioUnlockedRef = useRef(false);
   const shownMeetRequestIdsRef = useRef<Set<string>>(new Set());
   const flyToRef = useRef<((lat: number, lng: number) => void) | null>(null);
@@ -348,6 +350,64 @@ export default function Home() {
     dismissMeetAlert();
   }, [dismissMeetAlert]);
 
+  const playAlertSound = useCallback(() => {
+    if (!audioUnlockedRef.current) return;
+
+    if (!alertAudioRef.current) {
+      const audio = new Audio("/assets/alert-sound.wav");
+      audio.preload = "auto";
+      audio.addEventListener("error", () => {
+        alertAudioLoadFailedRef.current = true;
+      });
+      alertAudioRef.current = audio;
+      void audio.load();
+    }
+
+    const audio = alertAudioRef.current;
+    if (!audio) return;
+
+    if (!alertAudioLoadFailedRef.current) {
+      try {
+        audio.currentTime = 0;
+        const playPromise = audio.play();
+        if (playPromise) {
+          void playPromise.catch(() => {
+            // Browser autoplay policies can block audio; ignore silently.
+          });
+        }
+        return;
+      } catch {
+        // Fallback only when asset playback fails.
+      }
+    }
+
+    if (alertAudioLoadFailedRef.current) {
+      try {
+        const AudioContextConstructor =
+          window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextConstructor) return;
+
+        const ctx = audioContextRef.current ?? new AudioContextConstructor();
+        audioContextRef.current = ctx;
+        void ctx.resume().then(() => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = "triangle";
+          osc.frequency.setValueAtTime(220, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(120, ctx.currentTime + 0.18);
+          gain.gain.setValueAtTime(0.45, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.24);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.26);
+        });
+      } catch {
+        // Intentional no-op: sound feedback is optional.
+      }
+    }
+  }, []);
+
   const triggerMeetRequestAlert = useCallback((request: MeetRequest, source: "realtime" | "push") => {
     if (shownMeetRequestIdsRef.current.has(request.id)) return;
     shownMeetRequestIdsRef.current.add(request.id);
@@ -356,34 +416,7 @@ export default function Home() {
       navigator.vibrate([200, 100, 200, 100, 400]);
     }
 
-    if (audioUnlockedRef.current) {
-      try {
-        const AudioContextConstructor =
-          window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-
-        if (AudioContextConstructor) {
-          const ctx = audioContextRef.current ?? new AudioContextConstructor();
-          audioContextRef.current = ctx;
-          void ctx.resume().then(() => {
-            [0, 0.18].forEach((startTime) => {
-              const osc = ctx.createOscillator();
-              const gain = ctx.createGain();
-              osc.connect(gain);
-              gain.connect(ctx.destination);
-              osc.type = "triangle";
-              osc.frequency.setValueAtTime(220, ctx.currentTime + startTime);
-              osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + startTime + 0.18);
-              gain.gain.setValueAtTime(0.8, ctx.currentTime + startTime);
-              gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + 0.22);
-              osc.start(ctx.currentTime + startTime);
-              osc.stop(ctx.currentTime + startTime + 0.24);
-            });
-          });
-        }
-      } catch (error) {
-        console.warn("Meet sound failed:", error);
-      }
-    }
+    playAlertSound();
 
     document.title = `📍 MEET: ${request.fromName.toUpperCase()}`;
     if (titleTimeoutRef.current) clearTimeout(titleTimeoutRef.current);
@@ -400,7 +433,7 @@ export default function Home() {
       setMeetAlert(null);
       meetAlertTimeoutRef.current = null;
     }, 10000);
-  }, []);
+  }, [playAlertSound]);
 
   const registerPushToken = useCallback(async () => {
     if (!user) return;
@@ -814,12 +847,15 @@ export default function Home() {
     const unlockAudio = () => {
       try {
         audioUnlockedRef.current = true;
-        const AudioContextConstructor =
-          window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-
-        if (!AudioContextConstructor) return;
-        audioContextRef.current ??= new AudioContextConstructor();
-        void audioContextRef.current.resume();
+        if (!alertAudioRef.current) {
+          const audio = new Audio("/assets/alert-sound.wav");
+          audio.preload = "auto";
+          audio.addEventListener("error", () => {
+            alertAudioLoadFailedRef.current = true;
+          });
+          alertAudioRef.current = audio;
+          void audio.load();
+        }
       } catch (error) {
         console.warn("Audio unlock failed:", error);
       }
@@ -861,6 +897,15 @@ export default function Home() {
       }
       if (saveStatusTimeoutRef.current) {
         clearTimeout(saveStatusTimeoutRef.current);
+      }
+      if (meetAlertTimeoutRef.current) {
+        clearTimeout(meetAlertTimeoutRef.current);
+      }
+      if (meetToastTimeoutRef.current) {
+        clearTimeout(meetToastTimeoutRef.current);
+      }
+      if (meetCooldownTimeoutRef.current) {
+        clearTimeout(meetCooldownTimeoutRef.current);
       }
     };
   }, []);
@@ -941,49 +986,6 @@ export default function Home() {
     };
   }, [profileHydratedUid, user]);
 
-  const playPulseSound = useCallback(() => {
-    try {
-      const AudioContextConstructor =
-        window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-
-      if (!AudioContextConstructor) return;
-
-      const ctx = audioContextRef.current ?? new AudioContextConstructor();
-      audioContextRef.current = ctx;
-
-      void ctx.resume().then(() => {
-        [0, 0.3, 0.6].forEach((startTime) => {
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.type = "sine";
-          osc.frequency.setValueAtTime(80, ctx.currentTime + startTime);
-          osc.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + startTime + 0.25);
-          gain.gain.setValueAtTime(1.2, ctx.currentTime + startTime);
-          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + 0.3);
-          osc.start(ctx.currentTime + startTime);
-          osc.stop(ctx.currentTime + startTime + 0.35);
-        });
-
-        [0, 0.3, 0.6].forEach((startTime) => {
-          const osc2 = ctx.createOscillator();
-          const gain2 = ctx.createGain();
-          osc2.connect(gain2);
-          gain2.connect(ctx.destination);
-          osc2.type = "square";
-          osc2.frequency.setValueAtTime(880, ctx.currentTime + startTime);
-          gain2.gain.setValueAtTime(0.4, ctx.currentTime + startTime);
-          gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + 0.15);
-          osc2.start(ctx.currentTime + startTime);
-          osc2.stop(ctx.currentTime + startTime + 0.2);
-        });
-      });
-    } catch (e) {
-      console.warn("Audio failed:", e);
-    }
-  }, []);
-
   const requestWakeLock = useCallback(async () => {
     try {
       if ("wakeLock" in navigator) {
@@ -1053,7 +1055,7 @@ export default function Home() {
 
     void requestWakeLock();
 
-    playPulseSound();
+    playAlertSound();
 
     document.title = `⚡ PULSE FROM ${name.toUpperCase()}`;
     if (titleTimeoutRef.current) clearTimeout(titleTimeoutRef.current);
@@ -1071,7 +1073,7 @@ export default function Home() {
     pulseTimeoutRef.current = window.setTimeout(() => setPulseAlert(null), 2500);
 
     if (autoHunt) activateTemporaryHuntMode();
-  }, [activateTemporaryHuntMode, playPulseSound, requestWakeLock, showAlertNotification]);
+  }, [activateTemporaryHuntMode, playAlertSound, requestWakeLock, showAlertNotification]);
 
   const triggerMeetingPointAlert = useCallback((meeting: MeetingPointEvent) => {
     if (navigator.vibrate) {
@@ -1079,7 +1081,7 @@ export default function Home() {
     }
 
     void requestWakeLock();
-    playPulseSound();
+    playAlertSound();
 
     document.title = `📍 MEET: ${meeting.label.toUpperCase()}`;
     if (titleTimeoutRef.current) clearTimeout(titleTimeoutRef.current);
@@ -1093,7 +1095,7 @@ export default function Home() {
       `${meeting.label} · open the app to see it on the map`,
       "meeting-point"
     );
-  }, [playPulseSound, requestWakeLock, showAlertNotification]);
+  }, [playAlertSound, requestWakeLock, showAlertNotification]);
 
   useEffect(() => {
     if (!user) return;
@@ -1315,7 +1317,10 @@ export default function Home() {
         ...meetingPointEvent,
         at: serverTimestamp(),
       });
-      await set(ref(db, `meetingRequests/${requestId}`), request);
+      await set(ref(db, `meetingRequests/${requestId}`), {
+        ...request,
+        createdAtServer: serverTimestamp(),
+      });
 
       setMeetModalOpen(false);
       setMeetLabel("");

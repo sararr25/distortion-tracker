@@ -1,13 +1,24 @@
 "use client";
 
 import type { User } from "firebase/auth";
-import { child, get, ref, serverTimestamp, set, update } from "firebase/database";
-import { db, firebaseConfig } from "@/lib/firebase";
+import { get, ref, serverTimestamp, set } from "firebase/database";
+import { db } from "@/lib/firebase";
 
 const messagingModulePromise = import("firebase/messaging");
 
 function safeTokenId(token: string) {
   return encodeURIComponent(token);
+}
+
+async function resolveVapidKey() {
+  const envVapid = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY || process.env.PUBLIC_FIREBASE_VAPID_KEY;
+  if (envVapid) return envVapid;
+
+  const response = await fetch("/api/firebase-init", { cache: "no-store" });
+  if (!response.ok) return null;
+
+  const config = await response.json() as { vapidKey?: string | null };
+  return config.vapidKey ?? null;
 }
 
 export async function isPushSupported() {
@@ -44,8 +55,14 @@ export async function requestNotificationPermissionAndToken(user: User) {
   const messaging = await getMessagingClient();
   const registration = await getMessagingRegistration();
   const { getToken } = await messagingModulePromise;
+  const vapidKey = await resolveVapidKey();
+
+  if (!vapidKey) {
+    return { status: "error" as const, error: new Error("Missing VAPID key") };
+  }
+
   const token = await getToken(messaging, {
-    vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+    vapidKey,
     serviceWorkerRegistration: registration,
   });
 
