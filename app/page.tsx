@@ -179,7 +179,6 @@ export default function Home() {
   const [gpsInterval, setGpsInterval] = useState<GpsInterval>(60000);
   const [mapStyle, setMapStyle] = useState<"dark" | "light" | "satellite">("dark");
   const [profiles, setProfiles] = useState<Record<string, FriendProfile>>({});
-  const [profilesLoadedUid, setProfilesLoadedUid] = useState<string | null>(null);
   const [profileHydratedUid, setProfileHydratedUid] = useState<string | null>(null);
   const [emojiLocks, setEmojiLocks] = useState<Record<string, string>>({});
   const [profileName, setProfileName] = useState("");
@@ -240,11 +239,9 @@ export default function Home() {
   useEffect(() => {
     if (!user) return;
 
-    const uid = user.uid;
     const profilesRef = ref(db, "profiles");
     const unsubscribe = onValue(profilesRef, (snapshot) => {
       setProfiles((snapshot.val() ?? {}) as Record<string, FriendProfile>);
-      setProfilesLoadedUid(uid);
     });
 
     return () => {
@@ -253,29 +250,24 @@ export default function Home() {
   }, [user]);
 
   useEffect(() => {
-    if (!user || profilesLoadedUid !== user.uid || profileHydratedUid === user.uid) return;
+    if (!user || profileHydratedUid === user.uid) return;
 
     let cancelled = false;
+    let fallbackTimeout: ReturnType<typeof setTimeout> | null = null;
 
-    const loadProfile = async () => {
-      const profile = profiles[user.uid];
-      const userProfileSnapshot = await get(ref(db, `userProfiles/${user.uid}`)).catch((error) => {
-        console.error("Failed to load user profile:", error);
-        return null;
-      });
-      const userProfile = userProfileSnapshot?.exists() ? userProfileSnapshot.val() as UserProfile : null;
-
+    const hydrateProfile = (profile: UserProfile | null) => {
       if (cancelled) return;
 
+      const presenceProfile = profiles[user.uid];
       const savedName =
-        userProfile?.displayName?.trim() ||
-        profile?.name?.trim() ||
+        profile?.displayName?.trim() ||
+        presenceProfile?.name?.trim() ||
         window.localStorage.getItem(`dt-profile-name-${user.uid}`) ||
         user.displayName ||
         "Anonymous";
       const savedEmoji =
-        userProfile?.emoji ||
         profile?.emoji ||
+        presenceProfile?.emoji ||
         window.localStorage.getItem(`dt-profile-emoji-${user.uid}`) ||
         "🔥";
 
@@ -284,12 +276,26 @@ export default function Home() {
       setProfileHydratedUid(user.uid);
     };
 
+    const loadProfile = async () => {
+      const userProfileSnapshot = await get(ref(db, `userProfiles/${user.uid}`)).catch((error) => {
+        console.error("Failed to load user profile:", error);
+        return null;
+      });
+      const userProfile = userProfileSnapshot?.exists() ? userProfileSnapshot.val() as UserProfile : null;
+
+      if (cancelled) return;
+      if (fallbackTimeout) clearTimeout(fallbackTimeout);
+      hydrateProfile(userProfile);
+    };
+
+    fallbackTimeout = setTimeout(() => hydrateProfile(null), 1500);
     void loadProfile();
 
     return () => {
       cancelled = true;
+      if (fallbackTimeout) clearTimeout(fallbackTimeout);
     };
-  }, [profileHydratedUid, profiles, profilesLoadedUid, user]);
+  }, [profileHydratedUid, profiles, user]);
 
   useEffect(() => {
     if (!user) return;
