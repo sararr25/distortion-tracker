@@ -50,6 +50,10 @@ const LABEL_OFFSETS: Record<string, [number, number]> = {
   AWARENESS: [0.0001, 0],
 };
 
+function getZoomScale(zoom: number): number {
+  return Math.pow(1.6, zoom - 16);
+}
+
 const FESTIVAL_ZONES = [
   {
     name: "RAVE", emoji: "🔊", color: "#FF6B00", iconFile: "Rave_1.svg",
@@ -82,13 +86,13 @@ const FESTIVAL_ZONES = [
 ];
 
 const POIS = [
-  { name: "BAR", emoji: "🍺", iconFile: "Bar.svg", lat: 55.690873, lng: 12.617855 },
-  { name: "BAR", emoji: "🍺", iconFile: "Bar.svg", lat: 55.689738, lng: 12.617685 },
-  { name: "WC", emoji: "🚻", iconFile: "WC.svg", lat: 55.689934, lng: 12.616594 },
-  { name: "LOCKERS", emoji: "🔒", iconFile: "Lockers.svg", lat: 55.689957, lng: 12.615269 },
-  { name: "ENTRANCE", emoji: "🚪", iconFile: "Entrance.svg", lat: 55.689672, lng: 12.615095 },
-  { name: "WATER", emoji: "💧", iconFile: "Water.svg", lat: 55.690488, lng: 12.617131 },
-  { name: "WATER", emoji: "💧", iconFile: "Water.svg", lat: 55.691081, lng: 12.616684 },
+  { name: "BAR", emoji: "🍺", asset: "Bar.svg", lat: 55.690873, lng: 12.617855 },
+  { name: "BAR", emoji: "🍺", asset: "Bar.svg", lat: 55.689738, lng: 12.617685 },
+  { name: "WC", emoji: "🚻", asset: "WC.svg", lat: 55.689934, lng: 12.616594 },
+  { name: "LOCKERS", emoji: "🔒", asset: "Lockers.svg", lat: 55.689957, lng: 12.615269 },
+  { name: "ENTRANCE", emoji: "🚪", asset: "Entrance.svg", lat: 55.689672, lng: 12.615095 },
+  { name: "WATER", emoji: "💧", asset: "Water.svg", lat: 55.690488, lng: 12.617131 },
+  { name: "WATER", emoji: "💧", asset: "Water.svg", lat: 55.691081, lng: 12.616684 },
 ];
 
 function getNearestStage(lat: number, lng: number): string {
@@ -123,11 +127,15 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#039;");
 }
 
+function iconAssetUrl(fileName: string) {
+  return `/icons-zone/${encodeURIComponent(fileName)}`;
+}
+
 export default function Map({ locations, currentUid, mapStyle, focusedLocation }: Props) {
   const mapRef = useRef<{ map: LeafletMap; L: LeafletModule } | null>(null);
   const markersRef = useRef<Record<string, Marker>>({});
-  const labelMarkersRef = useRef<Marker[]>([]);
-  const poiMarkersRef = useRef<Marker[]>([]);
+  const labelMarkersRef = useRef<{ marker: Marker; zone: typeof FESTIVAL_ZONES[number] }[]>([]);
+  const poiMarkersRef = useRef<{ marker: Marker; poi: typeof POIS[number] }[]>([]);
   const tileLayerRef = useRef<TileLayer | null>(null);
   const mapStyleRef = useRef(mapStyle);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -138,12 +146,63 @@ export default function Map({ locations, currentUid, mapStyle, focusedLocation }
     mapStyleRef.current = mapStyle;
   }, [mapStyle]);
 
+  const updateMarkerSizes = (map: LeafletMap, L: LeafletModule) => {
+    const zoom = map.getZoom();
+    const scale = getZoomScale(zoom);
+
+    labelMarkersRef.current.forEach(({ marker, zone }) => {
+      const fontSize = Math.max(7, Math.round(11 * scale));
+      const emojiSize = Math.max(9, Math.round(14 * scale));
+      marker.setIcon(L.divIcon({
+        className: "",
+        html: `<div style="
+  color: ${zone.color};
+  font-family: monospace;
+  font-size: ${fontSize}px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 ${Math.round(10 * scale)}px ${zone.color}, 0 0 ${Math.round(20 * scale)}px ${zone.color}88;
+  white-space: nowrap;
+  pointer-events: none;
+  text-align: center;
+  line-height: 1.4;
+"><span style="font-size:${emojiSize}px">${zone.emoji}</span><br>${zone.name}</div>`,
+        iconAnchor: [Math.round(30 * scale), Math.round(8 * scale)],
+      }));
+    });
+
+    poiMarkersRef.current.forEach(({ marker, poi }) => {
+      const iconSize = Math.max(14, Math.round(28 * scale));
+      const shadowSize = Math.max(2, Math.round(4 * scale));
+      const html = poi.asset
+        ? `<img src="${iconAssetUrl(poi.asset)}" alt="" style="
+  width: ${iconSize}px;
+  height: ${iconSize}px;
+  filter: drop-shadow(0 0 ${shadowSize}px rgba(255,255,255,0.5));
+  pointer-events: none;
+" />`
+        : `<div style="
+  font-size: ${iconSize}px;
+  filter: drop-shadow(0 0 ${shadowSize}px rgba(255,255,255,0.5));
+  pointer-events: none;
+  line-height: 1;
+">${poi.emoji}</div>`;
+
+      marker.setIcon(L.divIcon({
+        className: "",
+        html,
+        iconAnchor: [Math.round(iconSize / 2), Math.round(iconSize / 2)],
+      }));
+    });
+  };
+
   useEffect(() => {
     if (typeof window === "undefined" || mapRef.current) return;
     const containerElement = containerRef.current;
     const initVersion = ++initVersionRef.current;
     let cancelled = false;
-    let updateVisibilityByZoom: (() => void) | null = null;
+    let updateZonesByZoom: (() => void) | null = null;
+    let updateMarkersByZoom: (() => void) | null = null;
 
     import("leaflet").then((L) => {
       if (cancelled || initVersionRef.current !== initVersion || !containerElement || mapRef.current) return;
@@ -191,44 +250,17 @@ export default function Map({ locations, currentUid, mapStyle, focusedLocation }
         const offset = LABEL_OFFSETS[zone.name] ?? [0, 0];
         const finalLat = latC + offset[0];
         const finalLng = lngC + offset[1];
-        const labelIcon = L.divIcon({
-          className: "",
-          html: `<div style="
-  color: ${zone.color};
-  font-family: monospace;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 0.12em;
-  text-shadow: 0 0 10px ${zone.color}, 0 0 20px ${zone.color}88;
-  white-space: nowrap;
-  pointer-events: none;
-  text-align: center;
-  line-height: 1.4;
-">${zone.emoji}<br>${zone.name}</div>`,
-          iconAnchor: [24, 16],
-        });
         const labelMarker = L.marker([finalLat, finalLng], {
-          icon: labelIcon,
+          icon: L.divIcon({ className: "", html: "" }),
           interactive: false,
         }).addTo(map);
-        labelMarkersRef.current.push(labelMarker);
+        labelMarkersRef.current.push({ marker: labelMarker, zone });
       });
 
       POIS.forEach((poi) => {
         const name = escapeHtml(poi.name);
-        const icon = L.divIcon({
-          className: "",
-          html: `<div style="
-  font-size: 18px;
-  filter: drop-shadow(0 0 4px rgba(255,255,255,0.6));
-  pointer-events: none;
-  line-height: 1;
-">${poi.emoji}</div>`,
-          iconSize: [18, 18],
-          iconAnchor: [9, 9],
-        });
         const poiMarker = L.marker([poi.lat, poi.lng], {
-          icon,
+          icon: L.divIcon({ className: "", html: "" }),
           interactive: false,
         }).addTo(map);
         poiMarker.bindTooltip(name, {
@@ -237,21 +269,11 @@ export default function Map({ locations, currentUid, mapStyle, focusedLocation }
           className: "festival-tooltip",
           offset: [0, -10],
         });
-        poiMarkersRef.current.push(poiMarker);
+        poiMarkersRef.current.push({ marker: poiMarker, poi });
       });
 
-      updateVisibilityByZoom = () => {
+      updateZonesByZoom = () => {
         const zoom = map.getZoom();
-        labelMarkersRef.current.forEach((marker) => {
-          const el = marker.getElement();
-          if (!el) return;
-          el.style.display = zoom >= 16 ? "block" : "none";
-        });
-        poiMarkersRef.current.forEach((marker) => {
-          const el = marker.getElement();
-          if (!el) return;
-          el.style.display = zoom >= 17 ? "block" : "none";
-        });
         map.eachLayer((layer) => {
           const zoneLayer = layer as StylableZoneLayer;
           if (!zoneLayer.setStyle || zoneLayer.options?.fillOpacity === undefined) return;
@@ -261,9 +283,12 @@ export default function Map({ locations, currentUid, mapStyle, focusedLocation }
           zoneLayer.setStyle({ weight, opacity });
         });
       };
+      updateMarkersByZoom = () => updateMarkerSizes(map, L);
 
-      map.on("zoomend", updateVisibilityByZoom);
-      updateVisibilityByZoom();
+      updateZonesByZoom();
+      updateMarkerSizes(map, L);
+      map.on("zoomend", updateZonesByZoom);
+      map.on("zoomend", updateMarkersByZoom);
 
       mapRef.current = { map, L };
       setReady(true);
@@ -272,8 +297,11 @@ export default function Map({ locations, currentUid, mapStyle, focusedLocation }
     return () => {
       cancelled = true;
       if (mapRef.current?.map) {
-        if (updateVisibilityByZoom) {
-          mapRef.current.map.off("zoomend", updateVisibilityByZoom);
+        if (updateZonesByZoom) {
+          mapRef.current.map.off("zoomend", updateZonesByZoom);
+        }
+        if (updateMarkersByZoom) {
+          mapRef.current.map.off("zoomend", updateMarkersByZoom);
         }
         mapRef.current.map.remove();
         mapRef.current = null;
