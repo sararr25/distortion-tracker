@@ -113,6 +113,7 @@ export default function Home() {
   const [localLocation, setLocalLocation] = useState<FriendLocation | undefined>();
   const [emoji, setEmoji] = useState("🔥");
   const [gpsInterval, setGpsInterval] = useState<3000 | 30000>(30000);
+  const [mapStyle, setMapStyle] = useState<"dark" | "light" | "satellite">("dark");
   const [profiles, setProfiles] = useState<Record<string, FriendProfile>>({});
   const [profilesLoadedUid, setProfilesLoadedUid] = useState<string | null>(null);
   const [profileHydratedUid, setProfileHydratedUid] = useState<string | null>(null);
@@ -721,7 +722,43 @@ export default function Home() {
       <div className="workspace">
         <section className="map-stage" id="map" aria-label="Mappa live">
           <div className="map-frame">
-            <Map locations={effectiveLocations} currentUid={user.uid} focusedLocation={focusedLocation} />
+            <Map
+              locations={effectiveLocations}
+              currentUid={user.uid}
+              mapStyle={mapStyle}
+              focusedLocation={focusedLocation}
+            />
+            <div style={{
+              position: "absolute",
+              top: "0.75rem",
+              left: "0.75rem",
+              zIndex: 1000,
+              display: "flex",
+              borderRadius: "6px",
+              overflow: "hidden",
+              border: "1px solid #333",
+            }}>
+              {(["dark", "light", "satellite"] as const).map((style) => (
+                <button
+                  key={style}
+                  onClick={() => setMapStyle(style)}
+                  style={{
+                    padding: "0.4rem 0.6rem",
+                    fontFamily: "monospace",
+                    fontSize: "0.65rem",
+                    fontWeight: 900,
+                    letterSpacing: "0.05em",
+                    cursor: "pointer",
+                    border: "none",
+                    borderRight: style !== "satellite" ? "1px solid #333" : "none",
+                    background: mapStyle === style ? "#CCFF00" : "#0a0a0a",
+                    color: mapStyle === style ? "#000" : "#666",
+                  }}
+                >
+                  {style === "dark" ? "🌑" : style === "light" ? "🌕" : "🛰️"}
+                </button>
+              ))}
+            </div>
             <div className="scanline-layer" />
             <div className="radar-sweep" />
           </div>
