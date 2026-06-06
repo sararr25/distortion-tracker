@@ -9,6 +9,7 @@ type MeetPushPayload = {
   fromEmoji: string;
   lat: number;
   lng: number;
+  label: string;
   message: string;
 };
 
@@ -28,6 +29,7 @@ function isValidPayload(payload: unknown): payload is MeetPushPayload {
     typeof candidate.fromEmoji === "string" &&
     typeof candidate.lat === "number" &&
     typeof candidate.lng === "number" &&
+    typeof candidate.label === "string" &&
     typeof candidate.message === "string"
   );
 }
@@ -101,6 +103,7 @@ export async function POST(request: NextRequest) {
     fromEmoji: payload.fromEmoji,
     lat: String(payload.lat),
     lng: String(payload.lng),
+    label: payload.label,
     message: payload.message,
     url: meetPath,
   };
@@ -113,7 +116,7 @@ export async function POST(request: NextRequest) {
     tokens,
     notification: {
       title: `Meet request from ${payload.fromName} ${payload.fromEmoji}`,
-      body: "Tap to open the Distortion map",
+      body: `${payload.fromName} wants to meet at ${payload.label} — open the app to respond!`,
     },
     data: meetData,
     webpush: {

@@ -139,7 +139,9 @@ messaging.onBackgroundMessage(async function(payload) {
     var title = isMeet
       ? "Meet request from " + (data.fromName || "Someone") + " " + (data.fromEmoji || "📍")
       : (data.fromEmoji || "⚡") + " " + (data.fromName || "Someone") + " sent a pulse!";
-    var body = isMeet ? "Tap to open the meeting point" : "Tap to find them on the map";
+    var body = isMeet
+      ? (data.fromName || "Someone") + " wants to meet at " + (data.label || "the meeting point") + " — open the app to respond!"
+      : "Tap to find them on the map";
     var url = data.url || (data.requestId ? "/?meetRequestId=" + encodeURIComponent(data.requestId) : "/");
 
     await self.registration.showNotification(title, {

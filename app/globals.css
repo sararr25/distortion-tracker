@@ -775,6 +775,15 @@ button {
   height: calc(100dvh - 5rem);
 }
 
+.map-column {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .lineup-workspace {
   grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
@@ -1899,6 +1908,144 @@ button {
 
 .mobile-radar.open {
   max-height: 22rem;
+}
+
+.map-column > .mobile-radar {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  width: 100%;
+}
+
+.meeting-rsvp {
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  border-top: 1px solid #00ff88;
+  background: #0a0a0a;
+  padding: 0.75rem 1rem;
+}
+
+.meeting-rsvp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.meeting-rsvp-header > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.meeting-rsvp-header strong {
+  overflow: hidden;
+  color: #00ff88;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meeting-rsvp-header span {
+  color: #666666;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+}
+
+.meeting-rsvp-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.4rem;
+}
+
+.meeting-rsvp-change,
+.meeting-rsvp-cancel {
+  min-height: 44px;
+  border: 1px solid #333333;
+  border-radius: 4px;
+  background: none;
+  padding: 0.3rem 0.6rem;
+  color: #777777;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.65rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.meeting-rsvp-cancel {
+  border-color: #ff4444;
+  color: #ff6666;
+}
+
+.meeting-rsvp-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.meeting-rsvp-buttons button {
+  flex: 1;
+  min-height: 48px;
+  border: none;
+  border-radius: 6px;
+  background: #00ff88;
+  padding: 0.75rem;
+  color: #000000;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.85rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.meeting-rsvp-buttons button:last-child {
+  border: 1px solid #ff4444;
+  background: transparent;
+  color: #ff4444;
+}
+
+.meeting-rsvp button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.meeting-rsvp-counts {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  color: #00ff88;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.8rem;
+}
+
+.meeting-rsvp-counts span:last-child {
+  color: #ff4444;
+}
+
+.meeting-rsvp-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.meeting-rsvp-people span {
+  font-size: 1.1rem;
+}
+
+.meeting-rsvp-mine {
+  color: #00ff88;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+}
+
+.meeting-rsvp-mine.cant {
+  color: #ff4444;
 }
 
 .drawer-handle {

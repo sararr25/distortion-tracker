@@ -89,11 +89,20 @@ type MeetingPoint = {
   label: string;
   setBy: string;
   setAt: number;
+  uid?: string;
 };
 
 type MeetingPointEvent = MeetingPoint & {
-  uid?: string;
   fromEmoji?: string;
+};
+
+type MeetingRSVPResponse = "coming" | "cant";
+
+type MeetingRSVP = {
+  name: string;
+  emoji: string;
+  response: MeetingRSVPResponse;
+  respondedAt: number;
 };
 
 const MEET_RESPONSE_LABELS = {
@@ -162,6 +171,12 @@ type MeetAlert = MeetRequest & {
 };
 
 // Firebase rules reminder: "meetingPoint": { ".read": "auth != null", ".write": "auth != null" }
+// IMPORTANT: Add to Firebase Console Realtime Database Rules:
+// "meetingRSVPs": {
+//   ".read": "auth != null",
+//   ".write": "!newData.exists() && root.child('meetingPoint').child('uid').val() === auth.uid",
+//   "$uid": { ".write": "auth != null && auth.uid === $uid" }
+// }
 
 type WakeLockSentinel = {
   release: () => Promise<void>;
@@ -407,6 +422,9 @@ export default function Home() {
   const [sharingToastMode, setSharingToastMode] = useState<"visible" | "hidden">("visible");
   const [activeFriend, setActiveFriend] = useState<string | null>(null);
   const [meetingPoint, setMeetingPoint] = useState<MeetingPoint | null>(null);
+  const [meetingRSVPs, setMeetingRSVPs] = useState<Record<string, MeetingRSVP>>({});
+  const [myRSVP, setMyRSVP] = useState<MeetingRSVPResponse | null>(null);
+  const [meetingRSVPBusy, setMeetingRSVPBusy] = useState(false);
   const [meetModalOpen, setMeetModalOpen] = useState(false);
   const [meetLabel, setMeetLabel] = useState("");
   const [meetAlert, setMeetAlert] = useState<MeetAlert | null>(null);
@@ -886,7 +904,14 @@ export default function Home() {
       setMeetingPoint(data);
 
       if (meetingPointInitializedRef.current && key && key !== prevMeetingPointRef.current) {
+        setMeetingRSVPs({});
+        setMyRSVP(null);
         activateTemporaryHuntMode();
+      }
+
+      if (!data) {
+        setMeetingRSVPs({});
+        setMyRSVP(null);
       }
 
       prevMeetingPointRef.current = key;
@@ -897,6 +922,21 @@ export default function Home() {
       unsubscribe();
     };
   }, [activateTemporaryHuntMode, user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const rsvpsRef = ref(db, "meetingRSVPs");
+    const unsubscribe = onValue(rsvpsRef, (snapshot) => {
+      const data = (snapshot.val() ?? {}) as Record<string, MeetingRSVP>;
+      setMeetingRSVPs(data);
+      setMyRSVP(data[user.uid]?.response ?? null);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -1651,6 +1691,44 @@ export default function Home() {
     setMeetModalOpen(true);
   }, [isMeetCoolingDown, showMeetToast]);
 
+  const handleMeetingRSVP = useCallback(async (response: MeetingRSVPResponse) => {
+    if (!user || !meetingPoint || meetingRSVPBusy) return;
+
+    setMeetingRSVPBusy(true);
+    try {
+      await set(ref(db, `meetingRSVPs/${user.uid}`), {
+        name: displayName || user.displayName || "Anonymous",
+        emoji,
+        response,
+        respondedAt: Date.now(),
+      });
+      setMyRSVP(response);
+    } catch (error) {
+      console.error("RSVP failed:", error);
+      showMeetToast(isPermissionDeniedError(error) ? "Firebase permissions blocked RSVP" : "RSVP failed", "error");
+    } finally {
+      setMeetingRSVPBusy(false);
+    }
+  }, [displayName, emoji, meetingPoint, meetingRSVPBusy, showMeetToast, user]);
+
+  const handleCancelMeetingPoint = useCallback(async () => {
+    if (!user || !meetingPoint || meetingPoint.uid !== user.uid || meetingRSVPBusy) return;
+
+    setMeetingRSVPBusy(true);
+    try {
+      await remove(ref(db, "meetingRSVPs"));
+      await remove(ref(db, "meetingPoint"));
+      setMeetingRSVPs({});
+      setMyRSVP(null);
+      showMeetToast("Meeting point cancelled", "success");
+    } catch (error) {
+      console.error("Failed to cancel meeting point:", error);
+      showMeetToast(isPermissionDeniedError(error) ? "Firebase permissions blocked cancellation" : "Cancellation failed", "error");
+    } finally {
+      setMeetingRSVPBusy(false);
+    }
+  }, [meetingPoint, meetingRSVPBusy, showMeetToast, user]);
+
   const handleSetMeetingPoint = useCallback(async () => {
     if (!user || isMeetCoolingDown || meetSending) return;
 
@@ -1708,6 +1786,7 @@ export default function Home() {
       let requestSavedToDatabase = true;
       try {
         await set(ref(db, "meetingPoint"), meetingPointEvent);
+        await remove(ref(db, "meetingRSVPs"));
         await push(ref(db, "meetingPointEvents"), {
           ...meetingPointEvent,
           at: serverTimestamp(),
@@ -1744,6 +1823,7 @@ export default function Home() {
             fromEmoji: emoji,
             lat,
             lng,
+            label,
             message,
           }),
         });
@@ -2097,7 +2177,8 @@ export default function Home() {
         </div>
       ) : (
         <div className="workspace">
-          <section className="map-stage" id="map" aria-label="Live map">
+          <div className="map-column">
+            <section className="map-stage" id="map" aria-label="Live map">
             <div className="map-frame">
               <Map
                 locations={effectiveLocations}
@@ -2172,6 +2253,20 @@ export default function Home() {
               <strong>PULSE</strong>
             </button>
 
+            </section>
+
+            {meetingPoint && (
+              <MeetingRSVPBanner
+                meetingPoint={meetingPoint}
+                meetingRSVPs={meetingRSVPs}
+                myRSVP={myRSVP}
+                isBusy={meetingRSVPBusy}
+                canCancel={meetingPoint.uid === user.uid}
+                onRespond={(response) => void handleMeetingRSVP(response)}
+                onCancel={() => void handleCancelMeetingPoint()}
+              />
+            )}
+
             <MobileRadar
               friends={friends}
               currentLocation={currentLocation}
@@ -2184,7 +2279,7 @@ export default function Home() {
               onFocusMeetingPoint={handleFocusMeetingPoint}
               onToggleOpen={() => setPanelOpen((value) => !value)}
             />
-          </section>
+          </div>
 
           <CommandCenter
             currentLocation={currentLocation}
@@ -3167,6 +3262,89 @@ function MobileMenu({
         </section>
       )}
     </aside>
+  );
+}
+
+function MeetingRSVPBanner({
+  meetingPoint,
+  meetingRSVPs,
+  myRSVP,
+  isBusy,
+  canCancel,
+  onRespond,
+  onCancel,
+}: {
+  meetingPoint: MeetingPoint;
+  meetingRSVPs: Record<string, MeetingRSVP>;
+  myRSVP: MeetingRSVPResponse | null;
+  isBusy: boolean;
+  canCancel: boolean;
+  onRespond: (response: MeetingRSVPResponse) => void;
+  onCancel: () => void;
+}) {
+  const responses = Object.entries(meetingRSVPs);
+  const comingList = responses.filter(([, rsvp]) => rsvp.response === "coming");
+  const cantCount = responses.filter(([, rsvp]) => rsvp.response === "cant").length;
+
+  return (
+    <section className="meeting-rsvp" aria-label={`RSVP for ${meetingPoint.label}`}>
+      <div className="meeting-rsvp-header">
+        <div>
+          <strong>📍 {myRSVP ? meetingPoint.label : `MEET: ${meetingPoint.label}`}</strong>
+          {!myRSVP && <span>Set by {meetingPoint.setBy} · Are you coming?</span>}
+        </div>
+        <div className="meeting-rsvp-header-actions">
+          {myRSVP && (
+            <button
+              className="meeting-rsvp-change"
+              type="button"
+              disabled={isBusy}
+              onClick={() => onRespond(myRSVP === "coming" ? "cant" : "coming")}
+            >
+              CHANGE
+            </button>
+          )}
+          {canCancel && (
+            <button
+              className="meeting-rsvp-cancel"
+              type="button"
+              disabled={isBusy}
+              onClick={onCancel}
+            >
+              CANCEL MEET
+            </button>
+          )}
+        </div>
+      </div>
+
+      {myRSVP ? (
+        <>
+          <div className="meeting-rsvp-counts">
+            <span>✅ {comingList.length} coming</span>
+            <span>❌ {cantCount} can&apos;t</span>
+          </div>
+          {comingList.length > 0 && (
+            <div className="meeting-rsvp-people" aria-label="People coming">
+              {comingList.map(([uid, rsvp]) => (
+                <span key={uid} title={rsvp.name}>{rsvp.emoji}</span>
+              ))}
+            </div>
+          )}
+          <div className={myRSVP === "coming" ? "meeting-rsvp-mine coming" : "meeting-rsvp-mine cant"}>
+            You: {myRSVP === "coming" ? "✅ Going" : "❌ Can't make it"}
+          </div>
+        </>
+      ) : (
+        <div className="meeting-rsvp-buttons">
+          <button type="button" disabled={isBusy} onClick={() => onRespond("coming")}>
+            ✅ COMING
+          </button>
+          <button type="button" disabled={isBusy} onClick={() => onRespond("cant")}>
+            ❌ CAN&apos;T MAKE IT
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
