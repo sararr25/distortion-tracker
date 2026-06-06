@@ -89,25 +89,60 @@ export async function POST(request: NextRequest) {
           title: `${payload.fromEmoji} ${payload.fromName} sent a pulse!`,
           body: "Tap to find them on the map",
         },
-        data: {
-          type: "pulse",
-          fromName: payload.fromName,
-          fromEmoji: payload.fromEmoji,
-          senderUid: payload.senderUid,
-          url: "/",
+        android: {
+          priority: "high",
+          ttl: 60000,
+          notification: {
+            channelId: "pulse-urgent",
+            sound: "default",
+            defaultSound: true,
+            vibrateTimingsMillis: [0, 500, 100, 500, 100, 800],
+            defaultVibrateTimings: false,
+            priority: "max",
+            notificationCount: 1,
+            localOnly: false,
+          },
+        },
+        apns: {
+          headers: {
+            "apns-priority": "10",
+            "apns-push-type": "alert",
+            "apns-expiration": "0",
+          },
+          payload: {
+            aps: {
+              alert: {
+                title: `${payload.fromEmoji} ${payload.fromName} sent a pulse!`,
+                body: "Tap to find them on the map",
+              },
+              sound: {
+                critical: false,
+                name: "default",
+                volume: 1,
+              },
+              badge: 1,
+              contentAvailable: true,
+              "interruption-level": "time-sensitive",
+            },
+          },
         },
         webpush: {
           headers: {
             Urgency: "high",
+            TTL: "60",
           },
           notification: {
+            title: `${payload.fromEmoji} ${payload.fromName} sent a pulse!`,
+            body: "Tap to find them on the map",
             icon: "/icon-192.png",
             badge: "/icon-192.png",
-            tag: `pulse-${payload.senderUid}`,
+            vibrate: [500, 100, 500, 100, 800],
+            requireInteraction: false,
+            silent: false,
+            tag: "pulse",
             renotify: true,
-            requireInteraction: true,
-            vibrate: [500, 100, 500, 100, 500],
           },
+          fcmOptions: {},
         },
       });
 

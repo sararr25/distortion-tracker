@@ -112,8 +112,9 @@ messaging.onBackgroundMessage(function(payload) {
     badge: "/icon-192.png",
     tag: isMeet ? "meet-" + (data.requestId || "request") : "pulse-" + (data.senderUid || "crew"),
     renotify: true,
-    requireInteraction: true,
-    vibrate: isMeet ? [200, 100, 200, 100, 400] : [500, 100, 500, 100, 500],
+    silent: false,
+    vibrate: isMeet ? [200, 100, 200, 100, 400] : [500, 100, 500, 100, 800],
+    requireInteraction: false,
     data: Object.assign({}, data, { url: url })
   });
 });
