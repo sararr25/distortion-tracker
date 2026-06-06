@@ -20,12 +20,49 @@ importScripts("https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-com
 firebase.initializeApp(${JSON.stringify(firebaseConfig)});
 
 self.addEventListener("install", function(event) {
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil(
+    Promise.all([
+      self.skipWaiting(),
+      caches.open("distortion-audio-v1").then(function(cache) {
+        return cache.add("/alert-sound.wav").catch(function(error) {
+          console.warn("Audio precache failed:", error);
+        });
+      })
+    ])
+  );
 });
 
 self.addEventListener("activate", function(event) {
   event.waitUntil(self.clients.claim());
 });
+
+async function playAlertSound() {
+  try {
+    var AudioContextConstructor = self.AudioContext || self.webkitAudioContext;
+    if (!AudioContextConstructor) {
+      console.warn("AudioContext is unavailable in this Service Worker");
+      return;
+    }
+
+    var cache = await caches.open("distortion-audio-v1");
+    var response = await cache.match("/alert-sound.wav");
+    if (!response) {
+      console.warn("Alert sound not in cache, fetching directly");
+      response = await fetch("/alert-sound.wav");
+    }
+    if (!response || !response.ok) return;
+
+    var arrayBuffer = await response.arrayBuffer();
+    var context = new AudioContextConstructor();
+    var buffer = await context.decodeAudioData(arrayBuffer);
+    var source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(context.destination);
+    source.start(0);
+  } catch (error) {
+    console.warn("playAlertSound failed:", error);
+  }
+}
 
 function getNotificationData(notification) {
   var rawData = notification && notification.data ? notification.data : {};
@@ -95,28 +132,32 @@ self.addEventListener("notificationclick", function(event) {
 
 var messaging = firebase.messaging();
 
-messaging.onBackgroundMessage(function(payload) {
-  if (payload.notification) return;
-
+messaging.onBackgroundMessage(async function(payload) {
   var data = payload.data || {};
   var isMeet = data.type === "meet";
-  var title = isMeet
-    ? "Meet request from " + (data.fromName || "Someone") + " " + (data.fromEmoji || "📍")
-    : (data.fromEmoji || "⚡") + " " + (data.fromName || "Someone") + " sent a pulse!";
-  var body = isMeet ? "Tap to open the meeting point" : "Tap to find them on the map";
-  var url = data.url || (data.requestId ? "/?meetRequestId=" + encodeURIComponent(data.requestId) : "/");
+  if (!payload.notification) {
+    var title = isMeet
+      ? "Meet request from " + (data.fromName || "Someone") + " " + (data.fromEmoji || "📍")
+      : (data.fromEmoji || "⚡") + " " + (data.fromName || "Someone") + " sent a pulse!";
+    var body = isMeet ? "Tap to open the meeting point" : "Tap to find them on the map";
+    var url = data.url || (data.requestId ? "/?meetRequestId=" + encodeURIComponent(data.requestId) : "/");
 
-  return self.registration.showNotification(title, {
-    body: body,
-    icon: "/icon-192.png",
-    badge: "/icon-192.png",
-    tag: isMeet ? "meet-" + (data.requestId || "request") : "pulse-" + (data.senderUid || "crew"),
-    renotify: true,
-    silent: false,
-    vibrate: isMeet ? [200, 100, 200, 100, 400] : [500, 100, 500, 100, 800],
-    requireInteraction: false,
-    data: Object.assign({}, data, { url: url })
-  });
+    await self.registration.showNotification(title, {
+      body: body,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: isMeet ? "meet-" + (data.requestId || "request") : "pulse",
+      renotify: true,
+      silent: false,
+      vibrate: isMeet ? [200, 100, 200, 100, 400] : [300, 100, 300, 100, 300, 100, 600],
+      requireInteraction: false,
+      data: Object.assign({}, data, { url: url })
+    });
+  }
+
+  if (!isMeet) {
+    await playAlertSound();
+  }
 });
 `;
 
