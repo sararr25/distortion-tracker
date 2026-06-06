@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { signInWithRedirect, signOut } from "firebase/auth";
+import { signInWithPopup, signInWithRedirect, signOut } from "firebase/auth";
 import {
   get,
   limitToLast,
@@ -106,6 +106,13 @@ type MeetingRSVP = {
   respondedAt: number;
 };
 
+type PulseEntry = {
+  from: string;
+  fromEmoji: string;
+  uid: string;
+  at: number;
+};
+
 const MEET_RESPONSE_LABELS = {
   coming: "I’m coming 🏃‍♀️",
   notComing: "Can’t, rave responsibly 🫡",
@@ -206,6 +213,14 @@ function formatAge(updatedAt: number, now: number) {
   const seconds = Math.max(0, Math.floor((now - updatedAt) / 1000));
   if (seconds < 60) return `${seconds}s`;
   return `${Math.floor(seconds / 60)}m`;
+}
+
+function getTimeAgo(timestamp: number, currentTime: number): string {
+  const diffMin = Math.floor(Math.max(0, currentTime - timestamp) / 60000);
+  if (diffMin < 1) return "just now";
+  if (diffMin === 1) return "1 min ago";
+  if (diffMin < 30) return `${diffMin} min ago`;
+  return "expiring soon";
 }
 
 function getLastSeen(updatedAt: number, now: number): string {
@@ -362,7 +377,14 @@ function buildMeetStatusGroups(request: MeetRequest | null, friends: [string, Fr
 }
 
 export default function Home() {
-  const { user, loading } = useAuth();
+  const {
+    user,
+    loading,
+    sessionExpired,
+    markIntentionalSignOut,
+    markSessionExpired,
+    resetSessionExpiry,
+  } = useAuth();
   const isFirstLoad = useRef(true);
   const pulseTimeoutRef = useRef<number | null>(null);
   const meetAlertTimeoutRef = useRef<number | null>(null);
@@ -404,6 +426,7 @@ export default function Home() {
   const [now, setNow] = useState(() => Date.now());
   const [tick, setTick] = useState(0);
   const [pulseAlert, setPulseAlert] = useState<{ from: string; emoji: string } | null>(null);
+  const [pulseHistory, setPulseHistory] = useState<PulseEntry[]>([]);
   const [gpsHuntNotice, setGpsHuntNotice] = useState(false);
   const [pulseChooserOpen, setPulseChooserOpen] = useState(false);
   const [pulseTargetUids, setPulseTargetUids] = useState<Set<string>>(() => new Set());
@@ -437,6 +460,7 @@ export default function Home() {
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>("map");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [centeringActive, setCenteringActive] = useState(false);
+  const [timeTick, setTimeTick] = useState(() => Date.now());
 
   const handleUpdate = useCallback((data: Record<string, FriendLocation>) => {
     setLocations(data);
@@ -938,6 +962,73 @@ export default function Home() {
       unsubscribe();
     };
   }, [user]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const currentUser = auth.currentUser;
+      if (!currentUser) return;
+
+      void currentUser.getIdToken(true).catch((error) => {
+        console.warn("Token refresh failed:", error);
+        markSessionExpired();
+      });
+    }, 30 * 60 * 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [markSessionExpired]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setTimeTick(Date.now());
+    }, 60000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const activeMeetingRequestId = meetingPoint?.requestId;
+  const activeMeetingSetAt = meetingPoint?.setAt;
+
+  useEffect(() => {
+    if (!activeMeetingSetAt || !user) return;
+
+    const thirtyMinutes = 30 * 60 * 1000;
+    const age = Date.now() - activeMeetingSetAt;
+    const remaining = Math.max(0, thirtyMinutes - age);
+
+    const expireMeeting = async () => {
+      try {
+        const idToken = await user.getIdToken();
+        const response = await fetch("/api/cancel-meeting", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${idToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            expire: true,
+            requestId: activeMeetingRequestId,
+          }),
+        });
+
+        if (!response.ok && response.status !== 409) {
+          throw new Error("Meeting auto-expiry request failed");
+        }
+      } catch (error) {
+        console.warn("Meeting auto-expiry failed:", error);
+      }
+    };
+
+    if (remaining === 0) {
+      void expireMeeting();
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void expireMeeting();
+    }, remaining);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [activeMeetingRequestId, activeMeetingSetAt, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -1488,9 +1579,25 @@ export default function Home() {
     const pulsesRef = ref(db, "pulses");
     const unsub = onChildAdded(pulsesRef, (snapshot) => {
       if (isFirstLoad.current) return;
-      const pulse = snapshot.val() as { from?: string; fromEmoji?: string; uid?: string; recipients?: string[] } | null;
+      const pulse = snapshot.val() as {
+        at?: number;
+        from?: string;
+        fromEmoji?: string;
+        uid?: string;
+        recipients?: string[];
+      } | null;
       if (!pulse || pulse.uid === auth.currentUser?.uid) return;
       if (Array.isArray(pulse.recipients) && user && !pulse.recipients.includes(user.uid)) return;
+
+      setPulseHistory((current) => [
+        {
+          from: pulse.from ?? "Someone",
+          fromEmoji: pulse.fromEmoji ?? "⚡",
+          uid: pulse.uid ?? snapshot.key ?? "unknown",
+          at: normalizeTimestamp(pulse.at) || Date.now(),
+        },
+        ...current,
+      ].slice(0, 10));
       triggerPulse(pulse.from ?? "Someone", pulse.fromEmoji ?? "⚡");
     });
 
@@ -1940,6 +2047,19 @@ export default function Home() {
     }
   }
 
+  async function handleReconnect() {
+    setAuthError("");
+    try {
+      markIntentionalSignOut();
+      await signOut(auth);
+      resetSessionExpiry();
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Session reconnect failed:", error);
+      markSessionExpired();
+    }
+  }
+
   async function handleLogout() {
     setMenuOpen(false);
     setPanelOpen(false);
@@ -1948,6 +2068,7 @@ export default function Home() {
     setMeetStatusOpen(false);
     setMeetStatusRequest(null);
     setMeetStatusRequestId(null);
+    markIntentionalSignOut();
     if (user) {
       await update(ref(db, `profiles/${user.uid}`), {
         online: false,
@@ -2008,6 +2129,10 @@ export default function Home() {
     );
   }
 
+  if (!user && sessionExpired) {
+    return <SessionExpiredOverlay onReconnect={() => void handleReconnect()} />;
+  }
+
   if (!user) {
     return <LoginScreen authError={authError} onLogin={handleLogin} />;
   }
@@ -2023,6 +2148,10 @@ export default function Home() {
 
   return (
     <main className="app-shell">
+      {sessionExpired && (
+        <SessionExpiredOverlay onReconnect={() => void handleReconnect()} />
+      )}
+
       {pulseAlert && (
         <div
           style={{
@@ -2312,6 +2441,7 @@ export default function Home() {
                 meetingRSVPs={meetingRSVPs}
                 myRSVP={myRSVP}
                 isBusy={meetingRSVPBusy}
+                timeTick={timeTick}
                 canCancel={meetingPoint.setByUid === user.uid}
                 onRespond={(response) => void handleMeetingRSVP(response)}
                 onCancel={() => void handleCancelMeetingPoint()}
@@ -2349,7 +2479,9 @@ export default function Home() {
             isIOS={isIOS}
             isInStandaloneMode={isInStandaloneMode}
             notifPermission={notifPermission}
+            pulseHistory={pulseHistory}
             pushBusy={pushBusy}
+            timeTick={timeTick}
             onLogout={handleLogout}
             onGpsModeChange={handleGpsModeChange}
             onNameChange={(name) => setProfileName(name.slice(0, 20))}
@@ -2378,7 +2510,9 @@ export default function Home() {
         isIOS={isIOS}
         isInStandaloneMode={isInStandaloneMode}
         notifPermission={notifPermission}
+        pulseHistory={pulseHistory}
         pushBusy={pushBusy}
+        timeTick={timeTick}
         onClose={() => setMenuOpen(false)}
         onEmojiChange={handleEmojiChange}
         onGpsModeChange={handleGpsModeChange}
@@ -2442,6 +2576,68 @@ export default function Home() {
         </button>
       </nav>
     </main>
+  );
+}
+
+function SessionExpiredOverlay({
+  onReconnect,
+}: {
+  onReconnect: () => void;
+}) {
+  return (
+    <div style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 9990,
+      background: "rgba(0,0,0,0.92)",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "1.5rem",
+      padding: "2rem",
+    }}>
+      <div style={{ fontSize: "3rem" }}>⚠️</div>
+      <div style={{ textAlign: "center" }}>
+        <p style={{
+          color: "#FF6B00",
+          fontFamily: "monospace",
+          fontWeight: 900,
+          fontSize: "1.1rem",
+          letterSpacing: "0.15em",
+          margin: "0 0 0.5rem",
+        }}>SESSION EXPIRED</p>
+        <p style={{
+          color: "#666",
+          fontFamily: "monospace",
+          fontSize: "0.8rem",
+          margin: 0,
+          lineHeight: 1.6,
+        }}>
+          Your session has expired.<br />
+          Tap below to log back in.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onReconnect}
+        style={{
+          background: "#CCFF00",
+          color: "#000",
+          border: "none",
+          borderRadius: "6px",
+          fontFamily: "monospace",
+          fontWeight: 900,
+          fontSize: "1rem",
+          letterSpacing: "0.1em",
+          padding: "1rem 2rem",
+          cursor: "pointer",
+          minHeight: "48px",
+        }}
+      >
+        ⚡ TAP TO RECONNECT
+      </button>
+    </div>
   );
 }
 
@@ -2921,6 +3117,90 @@ function PushNotificationsSection({
   );
 }
 
+function PulseHistorySection({
+  pulseHistory,
+  timeTick,
+}: {
+  pulseHistory: PulseEntry[];
+  timeTick: number;
+}) {
+  if (pulseHistory.length === 0) return null;
+
+  const currentTime = timeTick;
+
+  return (
+    <div>
+      <p style={{
+        color: "#666",
+        fontFamily: "monospace",
+        fontSize: "0.75rem",
+        marginBottom: "0.75rem",
+        letterSpacing: "0.1em",
+      }}>PULSE HISTORY</p>
+      <div style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.4rem",
+        maxHeight: "200px",
+        overflowY: "auto",
+        WebkitOverflowScrolling: "touch",
+      }}>
+        {pulseHistory.map((entry, index) => {
+          const diffMin = Math.floor(Math.max(0, currentTime - entry.at) / 60000);
+          const timeLabel = diffMin < 1
+            ? "just now"
+            : diffMin < 60
+              ? `${diffMin}min ago`
+              : `${Math.floor(diffMin / 60)}h ago`;
+
+          return (
+            <div
+              key={`${entry.uid}-${entry.at}-${index}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.75rem",
+                padding: "0.5rem 0.75rem",
+                background: "#111",
+                borderRadius: "4px",
+                borderLeft: index === 0 ? "2px solid #CCFF00" : "2px solid #222",
+              }}
+            >
+              <span style={{ fontSize: "1.2rem" }}>{entry.fromEmoji}</span>
+              <div style={{ flex: 1 }}>
+                <p style={{
+                  color: index === 0 ? "#CCFF00" : "#aaa",
+                  fontFamily: "monospace",
+                  fontWeight: 900,
+                  fontSize: "0.8rem",
+                  margin: 0,
+                }}>
+                  {entry.from.split(" ")[0].toUpperCase()}
+                </p>
+                <p style={{
+                  color: "#444",
+                  fontFamily: "monospace",
+                  fontSize: "0.65rem",
+                  margin: "1px 0 0",
+                }}>
+                  {timeLabel}
+                </p>
+              </div>
+              <span style={{
+                color: "#333",
+                fontFamily: "monospace",
+                fontSize: "0.65rem",
+              }}>
+                ⚡
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function CommandCenter({
   currentLocation,
   friends,
@@ -2937,7 +3217,9 @@ function CommandCenter({
   isIOS,
   isInStandaloneMode,
   notifPermission,
+  pulseHistory,
   pushBusy,
+  timeTick,
   onLogout,
   onGpsModeChange,
   onNameChange,
@@ -2964,7 +3246,9 @@ function CommandCenter({
   isIOS: boolean;
   isInStandaloneMode: boolean;
   notifPermission: NotificationPermission;
+  pulseHistory: PulseEntry[];
   pushBusy: boolean;
+  timeTick: number;
   onLogout: () => void;
   onGpsModeChange: (interval: GpsInterval, accuracy: GpsAccuracy) => void;
   onNameChange: (name: string) => void;
@@ -3021,6 +3305,12 @@ function CommandCenter({
           onGpsModeChange={onGpsModeChange}
         />
       </section>
+
+      {pulseHistory.length > 0 && (
+        <section className="panel-block">
+          <PulseHistorySection pulseHistory={pulseHistory} timeTick={timeTick} />
+        </section>
+      )}
 
       <section className="panel-block">
         <p className="panel-label">[EMOJI_SELECT]</p>
@@ -3200,7 +3490,9 @@ function MobileMenu({
   isIOS,
   isInStandaloneMode,
   notifPermission,
+  pulseHistory,
   pushBusy,
+  timeTick,
   onClose,
   onEmojiChange,
   onGpsModeChange,
@@ -3224,7 +3516,9 @@ function MobileMenu({
   isIOS: boolean;
   isInStandaloneMode: boolean;
   notifPermission: NotificationPermission;
+  pulseHistory: PulseEntry[];
   pushBusy: boolean;
+  timeTick: number;
   onClose: () => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
   onGpsModeChange: (interval: GpsInterval, accuracy: GpsAccuracy) => void;
@@ -3346,6 +3640,7 @@ function MobileMenu({
             gpsAccuracy={gpsAccuracy}
             onGpsModeChange={onGpsModeChange}
           />
+          <PulseHistorySection pulseHistory={pulseHistory} timeTick={timeTick} />
           <InstallAppSection
             installAvailable={installAvailable}
             isIOS={isIOS}
@@ -3368,6 +3663,7 @@ function MeetingRSVPBanner({
   meetingRSVPs,
   myRSVP,
   isBusy,
+  timeTick,
   canCancel,
   onRespond,
   onCancel,
@@ -3377,6 +3673,7 @@ function MeetingRSVPBanner({
   meetingRSVPs: Record<string, MeetingRSVP>;
   myRSVP: MeetingRSVPResponse | null;
   isBusy: boolean;
+  timeTick: number;
   canCancel: boolean;
   onRespond: (response: MeetingRSVPResponse) => void;
   onCancel: () => void;
@@ -3385,6 +3682,8 @@ function MeetingRSVPBanner({
   const responses = Object.entries(meetingRSVPs);
   const comingList = responses.filter(([, rsvp]) => rsvp.response === "coming");
   const cantCount = responses.filter(([, rsvp]) => rsvp.response === "cant").length;
+  const elapsedMinutes = Math.floor(Math.max(0, timeTick - meetingPoint.setAt) / 60000);
+  const expiresInMinutes = Math.max(0, 30 - elapsedMinutes);
 
   return (
     <section className="meeting-rsvp" aria-label={`RSVP for ${meetingPoint.label}`}>
@@ -3392,6 +3691,9 @@ function MeetingRSVPBanner({
         <div>
           <strong>📍 {myRSVP ? meetingPoint.label : `MEET: ${meetingPoint.label}`}</strong>
           {!myRSVP && <span>Set by {meetingPoint.setBy} · Are you coming?</span>}
+          <span style={{ color: "#444", fontSize: "0.65rem" }}>
+            {getTimeAgo(meetingPoint.setAt, timeTick)} · expires in {expiresInMinutes} min
+          </span>
         </div>
         <div className="meeting-rsvp-header-actions">
           {myRSVP && (

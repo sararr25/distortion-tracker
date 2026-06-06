@@ -252,6 +252,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
     let cancelled = false;
     let updateZonesByZoom: (() => void) | null = null;
     let updateMarkersByZoom: (() => void) | null = null;
+    let saveMapView: (() => void) | null = null;
 
     import("leaflet").then((L) => {
       if (cancelled || initVersionRef.current !== initVersion || !containerElement || mapRef.current) return;
@@ -270,14 +271,45 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
         shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
       });
 
+      const savedLat = Number.parseFloat(window.localStorage.getItem("distortion_map_lat") ?? "");
+      const savedLng = Number.parseFloat(window.localStorage.getItem("distortion_map_lng") ?? "");
+      const savedZoom = Number.parseInt(window.localStorage.getItem("distortion_map_zoom") ?? "", 10);
+      const hasSavedCenter =
+        !Number.isNaN(savedLat) &&
+        !Number.isNaN(savedLng) &&
+        savedLat >= 55.680 &&
+        savedLat <= 55.696 &&
+        savedLng >= 12.600 &&
+        savedLng <= 12.628;
+      const initialCenter: [number, number] = hasSavedCenter
+        ? [savedLat, savedLng]
+        : [55.6904, 12.6175];
+      const initialZoom =
+        !Number.isNaN(savedZoom) && savedZoom >= 15 && savedZoom <= 19
+          ? savedZoom
+          : 16;
+
       const map = L.map(container, {
-        center: [55.6904, 12.6175],
-        zoom: 16,
+        center: initialCenter,
+        zoom: initialZoom,
         minZoom: 15,
         maxZoom: 19,
         maxBounds: [[55.688, 12.613], [55.693, 12.623]],
         zoomControl: false,
       });
+
+      saveMapView = () => {
+        const center = map.getCenter();
+        try {
+          window.localStorage.setItem("distortion_map_lat", center.lat.toString());
+          window.localStorage.setItem("distortion_map_lng", center.lng.toString());
+          window.localStorage.setItem("distortion_map_zoom", map.getZoom().toString());
+        } catch (error) {
+          console.warn("Map position save failed:", error);
+        }
+      };
+      map.on("moveend", saveMapView);
+      map.on("zoomend", saveMapView);
 
       const tileLayer = TILE_LAYERS[mapStyleRef.current];
       tileLayerRef.current = L.tileLayer(tileLayer.url, {
@@ -370,6 +402,10 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
         }
         if (updateMarkersByZoom) {
           mapRef.current.map.off("zoomend", updateMarkersByZoom);
+        }
+        if (saveMapView) {
+          mapRef.current.map.off("moveend", saveMapView);
+          mapRef.current.map.off("zoomend", saveMapView);
         }
         mapRef.current.map.remove();
         mapRef.current = null;

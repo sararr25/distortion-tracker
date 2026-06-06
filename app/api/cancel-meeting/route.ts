@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getFirebaseAdminAuth, getFirebaseAdminDatabase } from "@/lib/firebase-admin";
 
 type CancelMeetingPayload = {
+  expire?: boolean;
   requestId?: string;
 };
 
@@ -30,9 +31,14 @@ export async function POST(request: NextRequest) {
     const meetingSnapshot = await db.ref("meetingPoint").get();
     const meetingPoint = meetingSnapshot.val() as {
       requestId?: string;
+      setAt?: number;
       setByUid?: string;
       uid?: string;
     } | null;
+    if (!meetingPoint) {
+      return NextResponse.json({ success: true });
+    }
+
     const activeOwnerUid = meetingPoint?.setByUid ?? meetingPoint?.uid;
     const requestId = payload.requestId || meetingPoint?.requestId;
 
@@ -43,11 +49,19 @@ export async function POST(request: NextRequest) {
       ownsRequest = meetRequest?.fromUid === decodedToken.uid;
     }
 
-    if (activeOwnerUid && activeOwnerUid !== decodedToken.uid) {
-      return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
-    }
-    if (!activeOwnerUid && !ownsRequest) {
-      return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
+    if (payload.expire) {
+      const setAt = Number(meetingPoint.setAt);
+      const isExpired = Number.isFinite(setAt) && Date.now() - setAt >= 30 * 60 * 1000;
+      if (!isExpired) {
+        return NextResponse.json({ success: false, error: "Meeting is not expired" }, { status: 409 });
+      }
+    } else {
+      if (activeOwnerUid && activeOwnerUid !== decodedToken.uid) {
+        return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
+      }
+      if (!activeOwnerUid && !ownsRequest) {
+        return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
+      }
     }
 
     const updates: Record<string, null> = {
