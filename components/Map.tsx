@@ -290,7 +290,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
       tilePaneRef.current = map.getPane("tilePane") ?? null;
       if (tilePaneRef.current) {
         tilePaneRef.current.style.filter = mapStyleRef.current === "dark"
-          ? "contrast(1.15) brightness(1.1)"
+          ? "contrast(1.3) brightness(1.4)"
           : "none";
       }
 
@@ -442,7 +442,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
     }).addTo(map);
     if (tilePaneRef.current) {
       tilePaneRef.current.style.filter = mapStyle === "dark"
-        ? "contrast(1.15) brightness(1.1)"
+        ? "contrast(1.3) brightness(1.4)"
         : "none";
     }
   }, [mapStyle]);

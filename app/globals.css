@@ -964,7 +964,7 @@ button {
 
 .map-style-switcher {
   position: absolute;
-  top: 3.5rem;
+  top: 3.1rem;
   left: 0.75rem;
   z-index: 1000;
   display: flex;
@@ -2676,7 +2676,7 @@ button {
   }
 
   .map-style-switcher {
-    top: 3.5rem;
+    top: 3.1rem;
     left: 0.75rem;
   }
 
@@ -2884,7 +2884,7 @@ button {
   }
 
   .map-style-switcher {
-    top: 3.5rem;
+    top: 3.1rem;
     left: 0.75rem;
   }
 
