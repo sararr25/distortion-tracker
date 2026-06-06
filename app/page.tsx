@@ -89,7 +89,7 @@ type MeetingPoint = {
   label: string;
   setBy: string;
   setAt: number;
-  uid?: string;
+  setByUid?: string;
 };
 
 type MeetingPointEvent = MeetingPoint & {
@@ -151,16 +151,6 @@ type MeetStatusGroups = {
   pending: MeetStatusPerson[];
 };
 
-type PushStatus =
-  | "loading"
-  | "disabled"
-  | "enabled"
-  | "blocked"
-  | "unsupported"
-  | "ios-home-screen"
-  | "saving"
-  | "error";
-
 type MeetToast = {
   message: string;
   variant: "success" | "warning" | "error";
@@ -174,7 +164,7 @@ type MeetAlert = MeetRequest & {
 // IMPORTANT: Add to Firebase Console Realtime Database Rules:
 // "meetingRSVPs": {
 //   ".read": "auth != null",
-//   ".write": "!newData.exists() && root.child('meetingPoint').child('uid').val() === auth.uid",
+//   ".write": "!newData.exists() && root.child('meetingPoint').child('setByUid').val() === auth.uid",
 //   "$uid": { ".write": "auth != null && auth.uid === $uid" }
 // }
 
@@ -193,7 +183,7 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 };
 
-type GpsInterval = 30000 | 300000;
+type GpsInterval = 30000 | 300000 | 600000;
 type GpsAccuracy = "high" | "low";
 type ActiveScreen = "map" | "lineup";
 type SaveStatus = "idle" | "saving" | "saved";
@@ -386,6 +376,7 @@ export default function Home() {
   const activeFriendTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const installBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const centerFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const alertAudioRef = useRef<HTMLAudioElement | null>(null);
   const alertAudioLoadFailedRef = useRef(false);
@@ -425,6 +416,7 @@ export default function Home() {
   const [meetingRSVPs, setMeetingRSVPs] = useState<Record<string, MeetingRSVP>>({});
   const [myRSVP, setMyRSVP] = useState<MeetingRSVPResponse | null>(null);
   const [meetingRSVPBusy, setMeetingRSVPBusy] = useState(false);
+  const [rsvpPanelDismissed, setRsvpPanelDismissed] = useState(false);
   const [meetModalOpen, setMeetModalOpen] = useState(false);
   const [meetLabel, setMeetLabel] = useState("");
   const [meetAlert, setMeetAlert] = useState<MeetAlert | null>(null);
@@ -436,13 +428,14 @@ export default function Home() {
   const [meetStatusRequestId, setMeetStatusRequestId] = useState<string | null>(null);
   const [meetStatusRequest, setMeetStatusRequest] = useState<MeetRequest | null>(null);
   const [meetStatusOpen, setMeetStatusOpen] = useState(false);
-  const [pushStatus, setPushStatus] = useState<PushStatus>("loading");
   const [pushBusy, setPushBusy] = useState(false);
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>("default");
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [installBannerMode, setInstallBannerMode] = useState<"android" | "ios" | null>(null);
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>("map");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [centeringActive, setCenteringActive] = useState(false);
 
   const handleUpdate = useCallback((data: Record<string, FriendLocation>) => {
     setLocations(data);
@@ -623,41 +616,42 @@ export default function Home() {
     }
   }, [playAlertSound]);
 
-  const registerPushToken = useCallback(async () => {
-    if (!user) return;
+  const handleEnableNotifications = useCallback(async () => {
+    if (!user || !("Notification" in window)) return;
 
-    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    const standalone =
-      (window.navigator as Navigator & { standalone?: boolean }).standalone === true ||
-      window.matchMedia("(display-mode: standalone)").matches;
+    const currentPermission = Notification.permission;
+    setNotifPermission(currentPermission);
 
-    if (ios && !standalone) {
-      setPushStatus("ios-home-screen");
+    if (currentPermission === "denied") {
+      const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+      window.alert(
+        ios
+          ? "To enable notifications:\n\nSettings → Distortion Tracker → Notifications → Allow Notifications"
+          : "To enable notifications:\n\nTap the lock icon in your browser address bar → Notifications → Allow"
+      );
       return;
     }
 
     setPushBusy(true);
     try {
       const result = await requestNotificationPermissionAndToken(user);
+      setNotifPermission(Notification.permission);
+
       if (result.status === "enabled") {
-        setPushStatus("enabled");
         showMeetToast("Push notifications enabled", "success");
         return;
       }
       if (result.status === "blocked") {
-        setPushStatus("blocked");
         showMeetToast("Notifications blocked", "warning");
         return;
       }
       if (result.status === "unsupported") {
-        setPushStatus("unsupported");
         showMeetToast("Push not supported in this browser", "warning");
         return;
       }
-      setPushStatus("disabled");
+      showMeetToast("Push setup failed", "error");
     } catch (error) {
       console.error("Failed to enable push notifications:", error);
-      setPushStatus("error");
       showMeetToast("Push setup failed", "error");
     } finally {
       setPushBusy(false);
@@ -900,10 +894,15 @@ export default function Home() {
     const unsubscribe = onValue(meetingRef, (snapshot) => {
       const data = (snapshot.val() ?? null) as MeetingPoint | null;
       const key = data ? `${data.lat},${data.lng},${data.setAt}` : null;
+      const isNewMeetingPoint = Boolean(key && key !== prevMeetingPointRef.current);
 
       setMeetingPoint(data);
 
-      if (meetingPointInitializedRef.current && key && key !== prevMeetingPointRef.current) {
+      if (isNewMeetingPoint) {
+        setRsvpPanelDismissed(false);
+      }
+
+      if (meetingPointInitializedRef.current && isNewMeetingPoint) {
         setMeetingRSVPs({});
         setMyRSVP(null);
         activateTemporaryHuntMode();
@@ -912,6 +911,7 @@ export default function Home() {
       if (!data) {
         setMeetingRSVPs({});
         setMyRSVP(null);
+        setRsvpPanelDismissed(false);
       }
 
       prevMeetingPointRef.current = key;
@@ -948,41 +948,33 @@ export default function Home() {
         const supported = await isPushSupported();
         if (cancelled) return;
 
-        if (!supported) {
-          setPushStatus("unsupported");
-          return;
+        if ("Notification" in window) {
+          setNotifPermission(Notification.permission);
         }
-
-        if (isIOS && !isInStandaloneMode) {
-          setPushStatus("ios-home-screen");
-          return;
-        }
-
-        if (Notification.permission === "denied") {
-          setPushStatus("blocked");
-          return;
-        }
+        if (!supported || !("Notification" in window)) return;
 
         if (Notification.permission === "granted") {
-          const tokenResult = await requestNotificationPermissionAndToken(user);
-          if (cancelled) return;
-          setPushStatus(tokenResult.status === "enabled" ? "enabled" : "error");
-          return;
+          await requestNotificationPermissionAndToken(user);
         }
-
-        setPushStatus("disabled");
       } catch (error) {
         console.warn("Push support check failed:", error);
-        if (!cancelled) setPushStatus("error");
+      }
+    };
+
+    const syncPermission = () => {
+      if ("Notification" in window) {
+        setNotifPermission(Notification.permission);
       }
     };
 
     void initializePush();
+    document.addEventListener("visibilitychange", syncPermission);
 
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", syncPermission);
     };
-  }, [isIOS, isInStandaloneMode, user]);
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -1284,6 +1276,9 @@ export default function Home() {
       }
       if (saveStatusTimeoutRef.current) {
         clearTimeout(saveStatusTimeoutRef.current);
+      }
+      if (centerFeedbackTimeoutRef.current) {
+        clearTimeout(centerFeedbackTimeoutRef.current);
       }
       if (meetAlertTimeoutRef.current) {
         clearTimeout(meetAlertTimeoutRef.current);
@@ -1675,13 +1670,39 @@ export default function Home() {
   }, []);
 
   const handleCenterOnMe = useCallback(() => {
+    setCenteringActive(true);
+    if (centerFeedbackTimeoutRef.current) clearTimeout(centerFeedbackTimeoutRef.current);
+    centerFeedbackTimeoutRef.current = setTimeout(() => {
+      setCenteringActive(false);
+      centerFeedbackTimeoutRef.current = null;
+    }, 1000);
+
+    const myLoc = locations[user?.uid ?? ""];
+    if (myLoc && Date.now() - myLoc.updatedAt < 60000) {
+      flyToRef.current?.(myLoc.lat, myLoc.lng);
+      return;
+    }
+
+    if (!navigator.geolocation) {
+      if (myLoc) flyToRef.current?.(myLoc.lat, myLoc.lng);
+      return;
+    }
+
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         flyToRef.current?.(pos.coords.latitude, pos.coords.longitude);
       },
-      (err) => console.error(err)
+      (error) => {
+        console.warn("Center on me failed:", error);
+        if (myLoc) flyToRef.current?.(myLoc.lat, myLoc.lng);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 5000,
+        maximumAge: 30000,
+      }
     );
-  }, []);
+  }, [locations, user?.uid]);
 
   const handleOpenMeetModal = useCallback(() => {
     if (isMeetCoolingDown) {
@@ -1712,12 +1733,12 @@ export default function Home() {
   }, [displayName, emoji, meetingPoint, meetingRSVPBusy, showMeetToast, user]);
 
   const handleCancelMeetingPoint = useCallback(async () => {
-    if (!user || !meetingPoint || meetingPoint.uid !== user.uid || meetingRSVPBusy) return;
+    if (!user || !meetingPoint || meetingPoint.setByUid !== user.uid || meetingRSVPBusy) return;
 
     setMeetingRSVPBusy(true);
     try {
-      await remove(ref(db, "meetingRSVPs"));
-      await remove(ref(db, "meetingPoint"));
+      await set(ref(db, "meetingRSVPs"), null);
+      await set(ref(db, "meetingPoint"), null);
       setMeetingRSVPs({});
       setMyRSVP(null);
       showMeetToast("Meeting point cancelled", "success");
@@ -1779,14 +1800,14 @@ export default function Home() {
         label,
         setBy: displayName,
         fromEmoji: emoji,
-        uid: user.uid,
+        setByUid: user.uid,
         setAt: createdAt,
       };
 
       let requestSavedToDatabase = true;
       try {
         await set(ref(db, "meetingPoint"), meetingPointEvent);
-        await remove(ref(db, "meetingRSVPs"));
+        await set(ref(db, "meetingRSVPs"), null);
         await push(ref(db, "meetingPointEvents"), {
           ...meetingPointEvent,
           at: serverTimestamp(),
@@ -2240,6 +2261,10 @@ export default function Home() {
               type="button"
               aria-label="Center map on me"
               onClick={handleCenterOnMe}
+              style={{
+                background: centeringActive ? "#CCFF00" : "#1a1a1a",
+                color: centeringActive ? "#000" : "#fff",
+              }}
             >
               🎯
             </button>
@@ -2255,15 +2280,16 @@ export default function Home() {
 
             </section>
 
-            {meetingPoint && (
+            {meetingPoint && !rsvpPanelDismissed && (
               <MeetingRSVPBanner
                 meetingPoint={meetingPoint}
                 meetingRSVPs={meetingRSVPs}
                 myRSVP={myRSVP}
                 isBusy={meetingRSVPBusy}
-                canCancel={meetingPoint.uid === user.uid}
+                canCancel={meetingPoint.setByUid === user.uid}
                 onRespond={(response) => void handleMeetingRSVP(response)}
                 onCancel={() => void handleCancelMeetingPoint()}
+                onDismiss={() => setRsvpPanelDismissed(true)}
               />
             )}
 
@@ -2296,7 +2322,7 @@ export default function Home() {
             installAvailable={Boolean(installPrompt)}
             isIOS={isIOS}
             isInStandaloneMode={isInStandaloneMode}
-            pushStatus={pushStatus}
+            notifPermission={notifPermission}
             pushBusy={pushBusy}
             onLogout={handleLogout}
             onGpsModeChange={handleGpsModeChange}
@@ -2304,7 +2330,7 @@ export default function Home() {
             onEmojiChange={handleEmojiChange}
             onSaveProfile={handleSaveProfile}
             onInstall={handleInstall}
-            onEnablePush={registerPushToken}
+            onEnablePush={handleEnableNotifications}
             onFocusFriend={handleFocusFriend}
             onSendPulse={handleOpenPulseChooser}
             isEmojiLocked={isEmojiLocked}
@@ -2325,7 +2351,7 @@ export default function Home() {
         installAvailable={Boolean(installPrompt)}
         isIOS={isIOS}
         isInStandaloneMode={isInStandaloneMode}
-        pushStatus={pushStatus}
+        notifPermission={notifPermission}
         pushBusy={pushBusy}
         onClose={() => setMenuOpen(false)}
         onEmojiChange={handleEmojiChange}
@@ -2334,7 +2360,7 @@ export default function Home() {
         onNameChange={(name) => setProfileName(name.slice(0, 20))}
         onSaveProfile={handleSaveProfile}
         onInstall={handleInstall}
-        onEnablePush={registerPushToken}
+        onEnablePush={handleEnableNotifications}
         isEmojiLocked={isEmojiLocked}
       />
 
@@ -2712,7 +2738,7 @@ function GpsModeControl({
   }> = [
     { id: "hunt", interval: 30000, accuracy: "high", color: "#FF6B00", label: "🔍 HUNT", sublabel: "30s · find friends" },
     { id: "chill", interval: 300000, accuracy: "high", color: "#CCFF00", label: "🔋 CHILL", sublabel: "5min · balanced" },
-    { id: "save", interval: 300000, accuracy: "low", color: "#00FFFF", label: "💤 SAVE", sublabel: "5min · low accuracy" },
+    { id: "save", interval: 600000, accuracy: "low", color: "#00FFFF", label: "💤 SAVE", sublabel: "10min · max battery" },
   ];
 
   return (
@@ -2781,41 +2807,77 @@ function InstallAppSection({
 }
 
 function PushNotificationsSection({
-  status,
+  permission,
   isBusy,
-  isIOS,
-  isInStandaloneMode,
   onEnablePush,
 }: {
-  status: PushStatus;
+  permission: NotificationPermission;
   isBusy: boolean;
-  isIOS: boolean;
-  isInStandaloneMode: boolean;
   onEnablePush: () => void | Promise<void>;
 }) {
-  const statusCopy =
-    status === "enabled"
-      ? "Push notifications enabled"
-      : status === "blocked"
-        ? "Notifications blocked"
-        : status === "ios-home-screen"
-          ? "Install the app to Home Screen to receive notifications on iPhone"
-          : status === "unsupported"
-            ? "Push notifications disabled"
-            : "Push notifications disabled";
-
-  const buttonDisabled = isBusy || status === "unsupported" || (status === "ios-home-screen" && (!isIOS || isInStandaloneMode));
+  if (permission === "granted") {
+    return (
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.5rem",
+        padding: "0.75rem 1rem",
+        background: "#0a1a0a",
+        border: "1px solid #00FF88",
+        borderRadius: "6px",
+      }}>
+        <span style={{ color: "#00FF88", fontSize: "1rem" }}>🔔</span>
+        <div>
+          <p style={{
+            color: "#00FF88",
+            fontFamily: "monospace",
+            fontWeight: 900,
+            fontSize: "0.8rem",
+            margin: 0,
+            letterSpacing: "0.1em",
+          }}>PUSH ALERTS ACTIVE</p>
+          <p style={{
+            color: "#666",
+            fontFamily: "monospace",
+            fontSize: "0.65rem",
+            margin: "2px 0 0",
+          }}>You will be notified when someone sends a pulse</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="push-section">
-      <p className="panel-label">PUSH ALERTS</p>
-      <div className={status === "enabled" ? "push-status enabled" : status === "blocked" ? "push-status blocked" : "push-status"}>
-        {statusCopy}
-      </div>
-      <button className="push-enable-button" type="button" disabled={buttonDisabled} onClick={() => void onEnablePush()}>
-        {isBusy ? "ENABLING..." : "ENABLE PUSH NOTIFICATIONS"}
-      </button>
-    </div>
+    <button
+      type="button"
+      disabled={isBusy}
+      onClick={() => void onEnablePush()}
+      style={{
+        width: "100%",
+        padding: "0.85rem",
+        background: "transparent",
+        border: `1px solid ${permission === "denied" ? "#FF6B00" : "#CCFF00"}`,
+        color: permission === "denied" ? "#FF6B00" : "#CCFF00",
+        borderRadius: "6px",
+        fontFamily: "monospace",
+        fontWeight: 900,
+        fontSize: "0.85rem",
+        letterSpacing: "0.1em",
+        cursor: isBusy ? "wait" : "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "0.5rem",
+        minHeight: "48px",
+        opacity: isBusy ? 0.6 : 1,
+      }}
+    >
+      {isBusy
+        ? "ENABLING..."
+        : permission === "denied"
+          ? "⚠️ NOTIFICATIONS BLOCKED — TAP TO FIX"
+          : "🔔 ENABLE PUSH NOTIFICATIONS"}
+    </button>
   );
 }
 
@@ -2834,7 +2896,7 @@ function CommandCenter({
   installAvailable,
   isIOS,
   isInStandaloneMode,
-  pushStatus,
+  notifPermission,
   pushBusy,
   onLogout,
   onGpsModeChange,
@@ -2861,7 +2923,7 @@ function CommandCenter({
   installAvailable: boolean;
   isIOS: boolean;
   isInStandaloneMode: boolean;
-  pushStatus: PushStatus;
+  notifPermission: NotificationPermission;
   pushBusy: boolean;
   onLogout: () => void;
   onGpsModeChange: (interval: GpsInterval, accuracy: GpsAccuracy) => void;
@@ -3003,10 +3065,8 @@ function CommandCenter({
 
       <section className="panel-block">
         <PushNotificationsSection
-          status={pushStatus}
+          permission={notifPermission}
           isBusy={pushBusy}
-          isIOS={isIOS}
-          isInStandaloneMode={isInStandaloneMode}
           onEnablePush={onEnablePush}
         />
       </section>
@@ -3099,7 +3159,7 @@ function MobileMenu({
   installAvailable,
   isIOS,
   isInStandaloneMode,
-  pushStatus,
+  notifPermission,
   pushBusy,
   onClose,
   onEmojiChange,
@@ -3123,7 +3183,7 @@ function MobileMenu({
   installAvailable: boolean;
   isIOS: boolean;
   isInStandaloneMode: boolean;
-  pushStatus: PushStatus;
+  notifPermission: NotificationPermission;
   pushBusy: boolean;
   onClose: () => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
@@ -3253,10 +3313,8 @@ function MobileMenu({
             onInstall={onInstall}
           />
           <PushNotificationsSection
-            status={pushStatus}
+            permission={notifPermission}
             isBusy={pushBusy}
-            isIOS={isIOS}
-            isInStandaloneMode={isInStandaloneMode}
             onEnablePush={onEnablePush}
           />
         </section>
@@ -3273,6 +3331,7 @@ function MeetingRSVPBanner({
   canCancel,
   onRespond,
   onCancel,
+  onDismiss,
 }: {
   meetingPoint: MeetingPoint;
   meetingRSVPs: Record<string, MeetingRSVP>;
@@ -3281,6 +3340,7 @@ function MeetingRSVPBanner({
   canCancel: boolean;
   onRespond: (response: MeetingRSVPResponse) => void;
   onCancel: () => void;
+  onDismiss: () => void;
 }) {
   const responses = Object.entries(meetingRSVPs);
   const comingList = responses.filter(([, rsvp]) => rsvp.response === "coming");
@@ -3311,9 +3371,17 @@ function MeetingRSVPBanner({
               disabled={isBusy}
               onClick={onCancel}
             >
-              CANCEL MEET
+              CANCEL MEETING
             </button>
           )}
+          <button
+            className="meeting-rsvp-dismiss"
+            type="button"
+            aria-label="Dismiss RSVP panel"
+            onClick={onDismiss}
+          >
+            ✕
+          </button>
         </div>
       </div>
 

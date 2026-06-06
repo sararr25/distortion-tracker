@@ -417,8 +417,16 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
       const color = isMe ? "#c3f400" : COLORS[colorIndex++ % COLORS.length];
       const label = escapeHtml(isMe ? "YOU" : loc.name.split(" ")[0] || "Guest");
       const emoji = escapeHtml(loc.emoji);
-      const hasHeading = loc.heading !== null && loc.heading !== undefined;
+      const hasHeading =
+        typeof loc.heading === "number" &&
+        !Number.isNaN(loc.heading) &&
+        loc.heading >= 0 &&
+        loc.heading <= 360;
       const rotation = hasHeading ? loc.heading : 0;
+
+      if (process.env.NODE_ENV === "development") {
+        console.log("Heading for", loc.name, ":", loc.heading);
+      }
 
       const icon = L.divIcon({
         className: "festival-friend-marker",
@@ -437,7 +445,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
                 border-right: 6px solid transparent;
                 border-bottom: 12px solid ${color};
                 transform: rotate(${rotation}deg);
-                transform-origin: center bottom;
+                transform-origin: center center;
                 margin-bottom: 2px;
                 filter: drop-shadow(0 0 4px ${color});
               "></div>
