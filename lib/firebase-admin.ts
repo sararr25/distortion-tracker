@@ -1,4 +1,5 @@
 import { cert, getApps, initializeApp, type App, type ServiceAccount } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import { getDatabase } from "firebase-admin/database";
 
 let adminApp: App | null = null;
@@ -54,4 +55,8 @@ export function getFirebaseAdminApp() {
 
 export function getFirebaseAdminDatabase() {
   return getDatabase(getFirebaseAdminApp()!);
+}
+
+export function getFirebaseAdminAuth() {
+  return getAuth(getFirebaseAdminApp());
 }

@@ -87,6 +87,7 @@ type MeetingPoint = {
   lat: number;
   lng: number;
   label: string;
+  requestId?: string;
   setBy: string;
   setAt: number;
   setByUid?: string;
@@ -1733,22 +1734,44 @@ export default function Home() {
   }, [displayName, emoji, meetingPoint, meetingRSVPBusy, showMeetToast, user]);
 
   const handleCancelMeetingPoint = useCallback(async () => {
-    if (!user || !meetingPoint || meetingPoint.setByUid !== user.uid || meetingRSVPBusy) return;
+    if (!user || meetingRSVPBusy) return;
+    const ownsMeeting =
+      meetingPoint?.setByUid === user.uid ||
+      meetStatusRequest?.fromUid === user.uid;
+    if (!ownsMeeting) return;
 
     setMeetingRSVPBusy(true);
     try {
-      await set(ref(db, "meetingRSVPs"), null);
-      await set(ref(db, "meetingPoint"), null);
+      const idToken = await user.getIdToken();
+      const response = await fetch("/api/cancel-meeting", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${idToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ requestId: meetStatusRequestId ?? meetingPoint?.requestId }),
+      });
+
+      if (!response.ok) {
+        const result = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(result?.error || "Cancellation failed");
+      }
+
       setMeetingRSVPs({});
       setMyRSVP(null);
+      setMeetingPoint(null);
+      setMeetStatusOpen(false);
+      setMeetStatusRequest(null);
+      setMeetStatusRequestId(null);
+      setRsvpPanelDismissed(false);
       showMeetToast("Meeting point cancelled", "success");
     } catch (error) {
       console.error("Failed to cancel meeting point:", error);
-      showMeetToast(isPermissionDeniedError(error) ? "Firebase permissions blocked cancellation" : "Cancellation failed", "error");
+      showMeetToast("Cancellation failed", "error");
     } finally {
       setMeetingRSVPBusy(false);
     }
-  }, [meetingPoint, meetingRSVPBusy, showMeetToast, user]);
+  }, [meetStatusRequest, meetStatusRequestId, meetingPoint, meetingRSVPBusy, showMeetToast, user]);
 
   const handleSetMeetingPoint = useCallback(async () => {
     if (!user || isMeetCoolingDown || meetSending) return;
@@ -1798,6 +1821,7 @@ export default function Home() {
         lat,
         lng,
         label,
+        requestId,
         setBy: displayName,
         fromEmoji: emoji,
         setByUid: user.uid,
@@ -2077,9 +2101,11 @@ export default function Home() {
       {meetStatusRequest && meetStatusOpen && (
         <MeetStatusPanel
           groups={meetStatusGroups}
+          isCancelling={meetingRSVPBusy}
           now={now}
           request={meetStatusRequest}
           onClose={() => setMeetStatusOpen(false)}
+          onCancelMeeting={() => void handleCancelMeetingPoint()}
           onFocusMeetingPoint={() => focusMeetRequest(meetStatusRequest)}
         />
       )}
@@ -2614,14 +2640,18 @@ function MeetRequestOverlay({
 function MeetStatusPanel({
   request,
   groups,
+  isCancelling,
   now,
   onClose,
+  onCancelMeeting,
   onFocusMeetingPoint,
 }: {
   request: MeetRequest;
   groups: MeetStatusGroups;
+  isCancelling: boolean;
   now: number;
   onClose: () => void;
+  onCancelMeeting: () => void;
   onFocusMeetingPoint: () => void;
 }) {
   return (
@@ -2635,12 +2665,22 @@ function MeetStatusPanel({
           ×
         </button>
       </div>
-      <button className="meet-status-point" type="button" onClick={onFocusMeetingPoint}>
-        📍 {request.message}
+      <div className="meet-status-scroll">
+        <button className="meet-status-point" type="button" onClick={onFocusMeetingPoint}>
+          📍 {request.message}
+        </button>
+        <MeetStatusSection title="COMING" people={groups.coming} now={now} />
+        <MeetStatusSection title="CAN’T MAKE IT" people={groups.notComing} now={now} />
+        <MeetStatusSection title="PENDING" people={groups.pending} now={now} />
+      </div>
+      <button
+        className="meet-status-end"
+        type="button"
+        disabled={isCancelling}
+        onClick={onCancelMeeting}
+      >
+        {isCancelling ? "ENDING MEETING..." : "END MEETING"}
       </button>
-      <MeetStatusSection title="COMING" people={groups.coming} now={now} />
-      <MeetStatusSection title="CAN’T MAKE IT" people={groups.notComing} now={now} />
-      <MeetStatusSection title="PENDING" people={groups.pending} now={now} />
     </section>
   );
 }
