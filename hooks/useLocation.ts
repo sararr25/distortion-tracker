@@ -5,6 +5,7 @@ import { db, auth } from "@/lib/firebase";
 export type FriendLocation = {
   lat: number;
   lng: number;
+  heading: number | null;
   name: string;
   emoji: string;
   updatedAt: number;
@@ -15,6 +16,7 @@ export function useLocation(
   active: boolean,
   emoji: string,
   intervalMs: number,
+  accuracyMode: "high" | "low",
   displayName: string,
   onUpdate: (locations: Record<string, FriendLocation>) => void
 ) {
@@ -45,10 +47,11 @@ export function useLocation(
             void set(ref(db, `locations/${uid}`), {
               lat: pos.coords.latitude,
               lng: pos.coords.longitude,
+              heading: pos.coords.heading ?? null,
               name: displayName || auth.currentUser?.displayName || "Anonymous",
               emoji,
               updatedAt: Date.now(),
-              ...(battery === undefined ? {} : { battery }),
+              battery: battery ?? null,
             });
           };
 
@@ -65,7 +68,7 @@ export function useLocation(
           }
         },
         (err) => console.warn("GPS error:", err),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        { enableHighAccuracy: accuracyMode === "high", timeout: 10000, maximumAge: 0 }
       );
     };
 
@@ -75,5 +78,5 @@ export function useLocation(
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [active, displayName, emoji, intervalMs]);
+  }, [accuracyMode, active, displayName, emoji, intervalMs]);
 }

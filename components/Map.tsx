@@ -262,7 +262,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
         container.replaceChildren();
       }
 
-      // fix icone leaflet con next.js
+      // Fix Leaflet's default icon URLs when bundled by Next.js.
       delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
       L.Icon.Default.mergeOptions({
         iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
@@ -409,20 +409,63 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
     const activeUids = new Set<string>();
 
     Object.entries(locations).forEach(([uid, loc]) => {
-      // salta posizioni vecchie di più di 10 minuti
+      // Skip locations older than 10 minutes.
       if (Date.now() - loc.updatedAt > 10 * 60 * 1000) return;
 
       activeUids.add(uid);
       const isMe = uid === currentUid;
       const color = isMe ? "#c3f400" : COLORS[colorIndex++ % COLORS.length];
-      const label = escapeHtml(isMe ? "TU" : loc.name.split(" ")[0] || "Guest");
+      const label = escapeHtml(isMe ? "YOU" : loc.name.split(" ")[0] || "Guest");
       const emoji = escapeHtml(loc.emoji);
+      const hasHeading = loc.heading !== null && loc.heading !== undefined;
+      const rotation = hasHeading ? loc.heading : 0;
 
       const icon = L.divIcon({
         className: "festival-friend-marker",
         html: `
-          <div class="festival-friend-marker__pin" style="--friend-color: ${color};">${emoji}</div>
-          <div class="festival-friend-marker__label" style="--friend-color: ${color};">${label}</div>
+          <div style="
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            pointer-events: none;
+          ">
+            ${hasHeading ? `
+              <div style="
+                width: 0;
+                height: 0;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-bottom: 12px solid ${color};
+                transform: rotate(${rotation}deg);
+                transform-origin: center bottom;
+                margin-bottom: 2px;
+                filter: drop-shadow(0 0 4px ${color});
+              "></div>
+            ` : ""}
+            <div style="
+              background: ${color};
+              color: #000;
+              border-radius: 50%;
+              width: 36px;
+              height: 36px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 18px;
+              font-weight: 900;
+              box-shadow: 0 0 12px ${color};
+              border: 2px solid #000;
+            ">${emoji}</div>
+            <div style="
+              color: ${color};
+              font-size: 11px;
+              font-weight: 700;
+              text-align: center;
+              margin-top: 2px;
+              text-shadow: 0 0 6px ${color};
+              white-space: nowrap;
+            ">${label}</div>
+          </div>
         `,
         iconAnchor: [18, 18],
       });

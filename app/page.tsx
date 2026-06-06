@@ -178,7 +178,8 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 };
 
-type GpsInterval = 3000 | 60000 | 300000;
+type GpsInterval = 30000 | 300000;
+type GpsAccuracy = "high" | "low";
 type ActiveScreen = "map" | "lineup";
 type SaveStatus = "idle" | "saving" | "saved";
 
@@ -376,10 +377,15 @@ export default function Home() {
   const audioUnlockedRef = useRef(false);
   const shownMeetRequestIdsRef = useRef<Set<string>>(new Set());
   const flyToRef = useRef<((lat: number, lng: number) => void) | null>(null);
+  const prevMeetingPointRef = useRef<string | null>(null);
+  const meetingPointInitializedRef = useRef(false);
+  const gpsAccuracyRef = useRef<GpsAccuracy>("high");
+  const prevGpsAccuracyRef = useRef<GpsAccuracy>("high");
   const [sharing, setSharing] = useState(false);
   const [locations, setLocations] = useState<Record<string, FriendLocation>>({});
   const [emoji, setEmoji] = useState("🔥");
-  const [gpsInterval, setGpsInterval] = useState<GpsInterval>(60000);
+  const [gpsInterval, setGpsInterval] = useState<GpsInterval>(300000);
+  const [gpsAccuracy, setGpsAccuracy] = useState<GpsAccuracy>("high");
   const [mapStyle, setMapStyle] = useState<"dark" | "light" | "satellite">("dark");
   const [profiles, setProfiles] = useState<Record<string, FriendProfile>>({});
   const [profileHydratedUid, setProfileHydratedUid] = useState<string | null>(null);
@@ -431,10 +437,38 @@ export default function Home() {
     }
   }, []);
 
-  const handleGpsIntervalChange = useCallback((interval: GpsInterval) => {
+  const handleGpsModeChange = useCallback((interval: GpsInterval, accuracy: GpsAccuracy) => {
+    clearAutoHuntTimeout();
+    gpsAccuracyRef.current = accuracy;
     setGpsInterval(interval);
-    if (interval === 3000) clearAutoHuntTimeout();
+    setGpsAccuracy(accuracy);
   }, [clearAutoHuntTimeout]);
+
+  const activateTemporaryHuntMode = useCallback(() => {
+    if (!huntTimeoutRef.current) {
+      prevGpsAccuracyRef.current = gpsAccuracyRef.current;
+    }
+
+    gpsAccuracyRef.current = "high";
+    setGpsInterval(30000);
+    setGpsAccuracy("high");
+
+    if (huntTimeoutRef.current) clearTimeout(huntTimeoutRef.current);
+    huntTimeoutRef.current = setTimeout(() => {
+      const previousAccuracy = prevGpsAccuracyRef.current;
+      gpsAccuracyRef.current = previousAccuracy;
+      setGpsInterval(300000);
+      setGpsAccuracy(previousAccuracy);
+      huntTimeoutRef.current = null;
+    }, 2 * 60 * 1000);
+
+    setGpsHuntNotice(true);
+    if (huntNoticeTimeoutRef.current) clearTimeout(huntNoticeTimeoutRef.current);
+    huntNoticeTimeoutRef.current = setTimeout(() => {
+      setGpsHuntNotice(false);
+      huntNoticeTimeoutRef.current = null;
+    }, 2000);
+  }, []);
 
   const handleMapReady = useCallback((flyTo: (lat: number, lng: number) => void) => {
     flyToRef.current = flyTo;
@@ -720,7 +754,7 @@ export default function Home() {
     }
   }, [openMeetRequestForCurrentUser, showMeetToast]);
 
-  useLocation(Boolean(user && sharing), emoji, gpsInterval, displayName, handleUpdate);
+  useLocation(Boolean(user && sharing), emoji, gpsInterval, gpsAccuracy, displayName, handleUpdate);
 
   useEffect(() => {
     if (!user || profileHydratedUid !== user.uid) return;
@@ -842,15 +876,27 @@ export default function Home() {
   useEffect(() => {
     if (!user) return;
 
+    meetingPointInitializedRef.current = false;
+    prevMeetingPointRef.current = null;
     const meetingRef = ref(db, "meetingPoint");
     const unsubscribe = onValue(meetingRef, (snapshot) => {
-      setMeetingPoint((snapshot.val() ?? null) as MeetingPoint | null);
+      const data = (snapshot.val() ?? null) as MeetingPoint | null;
+      const key = data ? `${data.lat},${data.lng},${data.setAt}` : null;
+
+      setMeetingPoint(data);
+
+      if (meetingPointInitializedRef.current && key && key !== prevMeetingPointRef.current) {
+        activateTemporaryHuntMode();
+      }
+
+      prevMeetingPointRef.current = key;
+      meetingPointInitializedRef.current = true;
     });
 
     return () => {
       unsubscribe();
     };
-  }, [user]);
+  }, [activateTemporaryHuntMode, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -1313,23 +1359,6 @@ export default function Home() {
     } catch (e) {
       console.warn("Wake lock failed:", e);
     }
-  }, []);
-
-  const activateTemporaryHuntMode = useCallback(() => {
-    setGpsInterval(3000);
-
-    if (huntTimeoutRef.current) clearTimeout(huntTimeoutRef.current);
-    huntTimeoutRef.current = setTimeout(() => {
-      setGpsInterval(60000);
-      huntTimeoutRef.current = null;
-    }, 2 * 60 * 1000);
-
-    setGpsHuntNotice(true);
-    if (huntNoticeTimeoutRef.current) clearTimeout(huntNoticeTimeoutRef.current);
-    huntNoticeTimeoutRef.current = setTimeout(() => {
-      setGpsHuntNotice(false);
-      huntNoticeTimeoutRef.current = null;
-    }, 2000);
   }, []);
 
   const showAlertNotification = useCallback((title: string, body: string, tag: string) => {
@@ -2162,6 +2191,7 @@ export default function Home() {
             friends={friends}
             emoji={emoji}
             gpsInterval={gpsInterval}
+            gpsAccuracy={gpsAccuracy}
             emojis={EMOJIS}
             now={now}
             profileName={profileName}
@@ -2174,7 +2204,7 @@ export default function Home() {
             pushStatus={pushStatus}
             pushBusy={pushBusy}
             onLogout={handleLogout}
-            onGpsIntervalChange={handleGpsIntervalChange}
+            onGpsModeChange={handleGpsModeChange}
             onNameChange={(name) => setProfileName(name.slice(0, 20))}
             onEmojiChange={handleEmojiChange}
             onSaveProfile={handleSaveProfile}
@@ -2191,6 +2221,7 @@ export default function Home() {
         open={menuOpen}
         emoji={emoji}
         gpsInterval={gpsInterval}
+        gpsAccuracy={gpsAccuracy}
         emojis={EMOJIS}
         displayName={displayName}
         profileName={profileName}
@@ -2203,7 +2234,7 @@ export default function Home() {
         pushBusy={pushBusy}
         onClose={() => setMenuOpen(false)}
         onEmojiChange={handleEmojiChange}
-        onGpsIntervalChange={handleGpsIntervalChange}
+        onGpsModeChange={handleGpsModeChange}
         onLogout={handleLogout}
         onNameChange={(name) => setProfileName(name.slice(0, 20))}
         onSaveProfile={handleSaveProfile}
@@ -2569,45 +2600,53 @@ function PwaInstallBanner({
 
 function GpsModeControl({
   gpsInterval,
-  onGpsIntervalChange,
+  gpsAccuracy,
+  onGpsModeChange,
 }: {
   gpsInterval: GpsInterval;
-  onGpsIntervalChange: (interval: GpsInterval) => void;
+  gpsAccuracy: GpsAccuracy;
+  onGpsModeChange: (interval: GpsInterval, accuracy: GpsAccuracy) => void;
 }) {
   const modes: Array<{
+    id: "hunt" | "chill" | "save";
     interval: GpsInterval;
+    accuracy: GpsAccuracy;
     color: string;
     label: string;
     sublabel: string;
   }> = [
-    { interval: 3000, color: "#FF6B00", label: "🔍 HUNT", sublabel: "3s · find friends" },
-    { interval: 60000, color: "#CCFF00", label: "🔋 CHILL", sublabel: "1min · balanced" },
-    { interval: 300000, color: "#00FFFF", label: "💤 SAVE", sublabel: "5min · battery" },
+    { id: "hunt", interval: 30000, accuracy: "high", color: "#FF6B00", label: "🔍 HUNT", sublabel: "30s · find friends" },
+    { id: "chill", interval: 300000, accuracy: "high", color: "#CCFF00", label: "🔋 CHILL", sublabel: "5min · balanced" },
+    { id: "save", interval: 300000, accuracy: "low", color: "#00FFFF", label: "💤 SAVE", sublabel: "5min · low accuracy" },
   ];
 
   return (
     <div>
       <p style={{ color: "#666", fontFamily: "monospace", fontSize: "0.75rem", marginBottom: "0.75rem", letterSpacing: "0.1em" }}>GPS MODE</p>
       <div style={{ display: "flex", gap: "0.5rem" }}>
-        {modes.map((mode) => (
-          <button
-            key={mode.interval}
-            type="button"
-            aria-pressed={gpsInterval === mode.interval}
-            onClick={() => onGpsIntervalChange(mode.interval)}
-            style={{
-              flex: 1, minHeight: "48px", padding: "0.85rem 0.45rem", fontFamily: "monospace", fontWeight: 900,
-              fontSize: "0.78rem", letterSpacing: "0.08em", cursor: "pointer",
-              borderRadius: "6px", border: "none",
-              background: gpsInterval === mode.interval ? "#1a1a1a" : "transparent",
-              color: gpsInterval === mode.interval ? mode.color : "#444",
-              outline: gpsInterval === mode.interval ? `1px solid ${mode.color}` : "1px solid #333",
-            }}
-          >
-            {mode.label}<br />
-            <span style={{ fontSize: "0.62rem", fontWeight: 400, opacity: 0.7 }}>{mode.sublabel}</span>
-          </button>
-        ))}
+        {modes.map((mode) => {
+          const isActive = gpsInterval === mode.interval && gpsAccuracy === mode.accuracy;
+
+          return (
+            <button
+              key={mode.id}
+              type="button"
+              aria-pressed={isActive}
+              onClick={() => onGpsModeChange(mode.interval, mode.accuracy)}
+              style={{
+                flex: 1, minHeight: "48px", padding: "0.85rem 0.45rem", fontFamily: "monospace", fontWeight: 900,
+                fontSize: "0.78rem", letterSpacing: "0.08em", cursor: "pointer",
+                borderRadius: "6px", border: "none",
+                background: isActive ? "#1a1a1a" : "transparent",
+                color: isActive ? mode.color : "#444",
+                outline: isActive ? `1px solid ${mode.color}` : "1px solid #333",
+              }}
+            >
+              {mode.label}<br />
+              <span style={{ fontSize: "0.62rem", fontWeight: 400, opacity: 0.7 }}>{mode.sublabel}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -2690,6 +2729,7 @@ function CommandCenter({
   friends,
   emoji,
   gpsInterval,
+  gpsAccuracy,
   emojis,
   now,
   profileName,
@@ -2702,7 +2742,7 @@ function CommandCenter({
   pushStatus,
   pushBusy,
   onLogout,
-  onGpsIntervalChange,
+  onGpsModeChange,
   onNameChange,
   onEmojiChange,
   onSaveProfile,
@@ -2716,6 +2756,7 @@ function CommandCenter({
   friends: [string, FriendSignal][];
   emoji: string;
   gpsInterval: GpsInterval;
+  gpsAccuracy: GpsAccuracy;
   emojis: string[];
   now: number;
   profileName: string;
@@ -2728,7 +2769,7 @@ function CommandCenter({
   pushStatus: PushStatus;
   pushBusy: boolean;
   onLogout: () => void;
-  onGpsIntervalChange: (interval: GpsInterval) => void;
+  onGpsModeChange: (interval: GpsInterval, accuracy: GpsAccuracy) => void;
   onNameChange: (name: string) => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
   onSaveProfile: () => void | Promise<void>;
@@ -2777,7 +2818,11 @@ function CommandCenter({
       </section>
 
       <section className="panel-block">
-        <GpsModeControl gpsInterval={gpsInterval} onGpsIntervalChange={onGpsIntervalChange} />
+        <GpsModeControl
+          gpsInterval={gpsInterval}
+          gpsAccuracy={gpsAccuracy}
+          onGpsModeChange={onGpsModeChange}
+        />
       </section>
 
       <section className="panel-block">
@@ -2950,6 +2995,7 @@ function MobileMenu({
   open,
   emoji,
   gpsInterval,
+  gpsAccuracy,
   emojis,
   displayName,
   profileName,
@@ -2962,7 +3008,7 @@ function MobileMenu({
   pushBusy,
   onClose,
   onEmojiChange,
-  onGpsIntervalChange,
+  onGpsModeChange,
   onLogout,
   onNameChange,
   onSaveProfile,
@@ -2973,6 +3019,7 @@ function MobileMenu({
   open: boolean;
   emoji: string;
   gpsInterval: GpsInterval;
+  gpsAccuracy: GpsAccuracy;
   emojis: string[];
   displayName: string;
   profileName: string;
@@ -2985,7 +3032,7 @@ function MobileMenu({
   pushBusy: boolean;
   onClose: () => void;
   onEmojiChange: (emoji: string) => void | Promise<void>;
-  onGpsIntervalChange: (interval: GpsInterval) => void;
+  onGpsModeChange: (interval: GpsInterval, accuracy: GpsAccuracy) => void;
   onLogout: () => void;
   onNameChange: (name: string) => void;
   onSaveProfile: () => void | Promise<void>;
@@ -3099,7 +3146,11 @@ function MobileMenu({
 
       {view === "settings" && (
         <section className="mobile-menu-section">
-          <GpsModeControl gpsInterval={gpsInterval} onGpsIntervalChange={onGpsIntervalChange} />
+          <GpsModeControl
+            gpsInterval={gpsInterval}
+            gpsAccuracy={gpsAccuracy}
+            onGpsModeChange={onGpsModeChange}
+          />
           <InstallAppSection
             installAvailable={installAvailable}
             isIOS={isIOS}
