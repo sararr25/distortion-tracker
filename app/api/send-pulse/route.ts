@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
           headers: {
             "apns-priority": "10",
             "apns-push-type": "alert",
-            "apns-expiration": "0",
+            "apns-expiration": "60",
           },
           payload: {
             aps: {
@@ -115,13 +115,9 @@ export async function POST(request: NextRequest) {
                 title: `${payload.fromEmoji} ${payload.fromName} sent a pulse!`,
                 body: "Tap to find them on the map",
               },
-              sound: {
-                critical: false,
-                name: "default",
-                volume: 1,
-              },
+              sound: "default",
               badge: 1,
-              contentAvailable: true,
+              mutableContent: true,
               "interruption-level": "time-sensitive",
             },
           },

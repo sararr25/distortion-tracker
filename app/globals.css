@@ -964,8 +964,8 @@ button {
 
 .map-style-switcher {
   position: absolute;
-  top: 4.45rem;
-  left: 1rem;
+  top: 3.5rem;
+  left: 0.75rem;
   z-index: 1000;
   display: flex;
   overflow: hidden;
@@ -1015,15 +1015,15 @@ button {
 }
 
 .festival-tiles--dark {
-  filter: brightness(1.65) contrast(1.22) saturate(0.9);
+  filter: none;
 }
 
 .festival-tiles--light {
-  filter: brightness(1.08) contrast(1.24) saturate(0.94);
+  filter: none;
 }
 
 .festival-tiles--satellite {
-  filter: brightness(1.12) contrast(1.22) saturate(1.18);
+  filter: none;
 }
 
 .leaflet-control-attribution {
@@ -1129,22 +1129,28 @@ button {
 .meet-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 5000;
-  display: grid;
-  place-items: center;
-  background: rgba(0, 0, 0, 0.62);
-  padding: 1rem;
+  z-index: 4999;
+  background: rgba(0, 0, 0, 0.7);
 }
 
 .meet-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 5000;
   display: grid;
-  width: calc(100% - 3rem);
-  max-width: 320px;
+  width: calc(100% - 2rem);
+  max-width: 360px;
+  max-height: 80vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
   gap: 0.85rem;
-  border: 1px solid #ccff00;
+  border: 1px solid #00ff88;
   border-radius: 8px;
   background: #0a0a0a;
-  padding: 1.5rem;
+  padding: 1.25rem;
 }
 
 .meet-modal h2 {
@@ -1157,14 +1163,16 @@ button {
 }
 
 .meet-modal input {
+  width: 100%;
   min-height: 44px;
+  box-sizing: border-box;
   border: 1px solid #ccff00;
   border-radius: 4px;
   background: #111111;
   color: #ffffff;
   padding: 0 0.75rem;
   font-family: var(--font-mono), monospace;
-  font-size: 0.76rem;
+  font-size: 16px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -1190,7 +1198,8 @@ button {
 }
 
 .meet-modal-actions button {
-  min-height: 44px;
+  width: 100%;
+  min-height: 48px;
   border-radius: 4px;
   font-family: var(--font-mono), monospace;
   font-size: 0.7rem;
@@ -1303,7 +1312,8 @@ button {
 }
 
 .festival-poi-marker {
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .festival-poi-marker__inner {
@@ -2666,8 +2676,8 @@ button {
   }
 
   .map-style-switcher {
-    top: 3.35rem;
-    left: 0.65rem;
+    top: 3.5rem;
+    left: 0.75rem;
   }
 
   .map-style-switcher button {
@@ -2874,8 +2884,8 @@ button {
   }
 
   .map-style-switcher {
-    top: 4.45rem;
-    left: 1.5rem;
+    top: 3.5rem;
+    left: 0.75rem;
   }
 
   .pulse-button {

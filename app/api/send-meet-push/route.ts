@@ -107,6 +107,8 @@ export async function POST(request: NextRequest) {
     message: payload.message,
     url: meetPath,
   };
+  const notificationTitle = `📍 ${payload.fromName} set a meeting point!`;
+  const notificationBody = `Meet at: ${payload.label} — tap to respond`;
 
   if (tokens.length === 0) {
     return NextResponse.json({ success: true, sentCount: 0, failedCount: 0 });
@@ -115,19 +117,52 @@ export async function POST(request: NextRequest) {
   const responses = await messaging.sendEachForMulticast({
     tokens,
     notification: {
-      title: `Meet request from ${payload.fromName} ${payload.fromEmoji}`,
-      body: `${payload.fromName} wants to meet at ${payload.label} — open the app to respond!`,
+      title: notificationTitle,
+      body: notificationBody,
     },
     data: meetData,
+    android: {
+      priority: "high",
+      ttl: 60000,
+      notification: {
+        channelId: "pulse-urgent",
+        sound: "default",
+        defaultSound: true,
+        vibrateTimingsMillis: [0, 300, 100, 300, 100, 300],
+        defaultVibrateTimings: false,
+        priority: "max",
+      },
+    },
+    apns: {
+      headers: {
+        "apns-priority": "10",
+        "apns-push-type": "alert",
+      },
+      payload: {
+        aps: {
+          alert: {
+            title: notificationTitle,
+            body: notificationBody,
+          },
+          sound: "default",
+          badge: 1,
+          "interruption-level": "time-sensitive",
+        },
+      },
+    },
     webpush: {
       headers: {
-        Urgency: "high",
+        Urgency: "very-high",
+        TTL: "60",
       },
       notification: {
+        title: notificationTitle,
+        body: notificationBody,
         icon: "/icon-192.png",
         badge: "/icon-192.png",
-        vibrate: [200, 100, 200, 100, 400],
-        requireInteraction: true,
+        tag: "meetingpoint",
+        renotify: true,
+        silent: false,
       },
     },
   });

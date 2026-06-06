@@ -175,21 +175,10 @@ function getZoneLabelMetrics(zoom: number, isMobile: boolean, mode: ZoneLabelMod
   return { textSize, iconSize, gap, padX, padY, width, height };
 }
 
-function getPoiSize(zoom: number, isMobile: boolean, poiName: string) {
-  const isHighPriorityPoi = poiName === "WATER" || poiName === "WC" || poiName === "TOILETS";
-  const isBoostedPoi = poiName === "BAR" || poiName === "LOCKERS" || poiName === "ENTRANCE";
-
-  const base = isHighPriorityPoi
-    ? (isMobile ? 40 : 36)
-    : isBoostedPoi
-      ? (isMobile ? 36 : 32)
-      : (isMobile ? 30 : 27);
-  const max = isHighPriorityPoi
-    ? (isMobile ? 46 : 42)
-    : isBoostedPoi
-      ? (isMobile ? 42 : 38)
-      : (isMobile ? 34 : 31);
-  return Math.min(max, Math.max(base, base + Math.max(0, zoom - 16)));
+function getPoiSize(zoom: number) {
+  const scale = getZoomScale(zoom);
+  const iconSize = Math.round(40 * scale);
+  return Math.max(20, Math.min(56, iconSize));
 }
 
 export default function Map({ locations, currentUid, mapStyle, meetingPoint, onMapReady, focusedLocation }: Props) {
@@ -199,6 +188,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
   const labelMarkersRef = useRef<{ marker: Marker; zone: typeof FESTIVAL_ZONES[number] }[]>([]);
   const poiMarkersRef = useRef<{ marker: Marker; poi: typeof POIS[number] }[]>([]);
   const tileLayerRef = useRef<TileLayer | null>(null);
+  const tilePaneRef = useRef<HTMLElement | null>(null);
   const mapStyleRef = useRef(mapStyle);
   const containerRef = useRef<HTMLDivElement>(null);
   const initVersionRef = useRef(0);
@@ -228,19 +218,19 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
     });
 
     poiMarkersRef.current.forEach(({ marker, poi }) => {
-      const iconSize = getPoiSize(zoom, isMobile, poi.name);
+      const clampedSize = getPoiSize(zoom);
       const shadowSize = Math.max(4, Math.round(6 * scale));
       const html = poi.asset
-        ? `<div class="festival-poi-marker__inner" style="--poi-size: ${iconSize}px; --poi-glow: ${shadowSize}px;">
+        ? `<div class="festival-poi-marker__inner" style="--poi-size: ${clampedSize}px; --poi-glow: ${shadowSize}px;">
   <img class="festival-poi-marker__icon" src="${iconAssetUrl(poi.asset)}" alt="" />
 </div>`
-        : `<div class="festival-poi-marker__inner festival-poi-marker__inner--emoji" style="--poi-size: ${iconSize}px; --poi-glow: ${shadowSize}px;">${poi.emoji}</div>`;
+        : `<div class="festival-poi-marker__inner festival-poi-marker__inner--emoji" style="--poi-size: ${clampedSize}px; --poi-glow: ${shadowSize}px;">${poi.emoji}</div>`;
 
       marker.setIcon(L.divIcon({
         className: `festival-poi-marker festival-poi-marker--${poi.name.toLowerCase()}`,
         html,
-        iconSize: [iconSize, iconSize],
-        iconAnchor: [Math.round(iconSize / 2), Math.round(iconSize / 2)],
+        iconSize: [clampedSize, clampedSize],
+        iconAnchor: [Math.round(clampedSize / 2), Math.round(clampedSize / 2)],
       }));
     });
   };
@@ -297,6 +287,12 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
         maxBounds: [[55.688, 12.613], [55.693, 12.623]],
         zoomControl: false,
       });
+      tilePaneRef.current = map.getPane("tilePane") ?? null;
+      if (tilePaneRef.current) {
+        tilePaneRef.current.style.filter = mapStyleRef.current === "dark"
+          ? "contrast(1.15) brightness(1.1)"
+          : "none";
+      }
 
       saveMapView = () => {
         const center = map.getCenter();
@@ -357,16 +353,25 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
 
       POIS.forEach((poi) => {
         const name = escapeHtml(poi.name);
+        const clampedSize = getPoiSize(map.getZoom());
         const poiMarker = L.marker([poi.lat, poi.lng], {
           icon: L.divIcon({ className: "festival-poi-marker", html: "" }),
-          interactive: false,
+          interactive: true,
           pane: "festival-pois",
         }).addTo(map);
+        poiMarker.on("click", () => {
+          const currentZoom = map.getZoom();
+          const targetZoom = Math.max(currentZoom, 18);
+          map.flyTo([poi.lat, poi.lng], targetZoom, {
+            animate: true,
+            duration: 0.6,
+          });
+        });
         poiMarker.bindTooltip(name, {
           permanent: false,
           direction: "top",
           className: "festival-tooltip",
-          offset: [0, -10],
+          offset: [0, -clampedSize / 2 - 4],
         });
         poiMarkersRef.current.push({ marker: poiMarker, poi });
       });
@@ -420,6 +425,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
       labelMarkersRef.current = [];
       poiMarkersRef.current = [];
       tileLayerRef.current = null;
+      tilePaneRef.current = null;
       setReady(false);
     };
   }, [onMapReady]);
@@ -434,6 +440,11 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
       attribution: tileLayer.attribution,
       className: TILE_LAYER_CLASSES[mapStyle],
     }).addTo(map);
+    if (tilePaneRef.current) {
+      tilePaneRef.current.style.filter = mapStyle === "dark"
+        ? "contrast(1.15) brightness(1.1)"
+        : "none";
+    }
   }, [mapStyle]);
 
   useEffect(() => {

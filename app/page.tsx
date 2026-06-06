@@ -1968,6 +1968,7 @@ export default function Home() {
         const response = await fetch("/api/send-meet-push", {
           method: "POST",
           headers: { "content-type": "application/json" },
+          keepalive: true,
           body: JSON.stringify({
             requestId,
             fromUid: user.uid,
@@ -2726,7 +2727,8 @@ function MeetHereModal({
   isCoolingDown: boolean;
 }) {
   return (
-    <div className="meet-modal-backdrop" role="presentation">
+    <>
+      <div className="meet-modal-backdrop" role="presentation" onClick={onCancel} />
       <section className="meet-modal" role="dialog" aria-modal="true" aria-labelledby="meet-modal-title">
         <h2 id="meet-modal-title">SEND MEET REQUEST</h2>
         <input
@@ -2746,7 +2748,7 @@ function MeetHereModal({
           </button>
         </div>
       </section>
-    </div>
+    </>
   );
 }
 
