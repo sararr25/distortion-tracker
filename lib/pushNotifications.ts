@@ -2,9 +2,10 @@
 
 import type { User } from "firebase/auth";
 import { get, ref, serverTimestamp, set } from "firebase/database";
-import { db } from "@/lib/firebase";
+import { db, firebaseApp } from "@/lib/firebase";
 
 const messagingModulePromise = import("firebase/messaging");
+const MESSAGING_SERVICE_WORKER_PATH = "/api/firebase-messaging-sw";
 
 function safeTokenId(token: string) {
   return encodeURIComponent(token);
@@ -31,11 +32,22 @@ export async function isPushSupported() {
 
 async function getMessagingClient() {
   const { getMessaging } = await messagingModulePromise;
-  return getMessaging();
+  return getMessaging(firebaseApp);
 }
 
-async function getMessagingRegistration() {
-  return navigator.serviceWorker.register("/firebase-messaging-sw.js");
+export async function getPushRegistration() {
+  if (typeof window === "undefined" || !("serviceWorker" in navigator)) return null;
+
+  const registration = await navigator.serviceWorker.register(
+    MESSAGING_SERVICE_WORKER_PATH,
+    {
+      scope: "/",
+      updateViaCache: "none",
+    }
+  );
+
+  await registration.update().catch(() => undefined);
+  return registration;
 }
 
 export async function requestNotificationPermissionAndToken(user: User) {
@@ -47,15 +59,22 @@ export async function requestNotificationPermissionAndToken(user: User) {
     return { status: "blocked" as const };
   }
 
-  const permission = await Notification.requestPermission();
+  const permission =
+    Notification.permission === "granted"
+      ? "granted"
+      : await Notification.requestPermission();
   if (permission !== "granted") {
     return { status: permission === "denied" ? ("blocked" as const) : ("disabled" as const) };
   }
 
   const messaging = await getMessagingClient();
-  const registration = await getMessagingRegistration();
+  const registration = await getPushRegistration();
   const { getToken } = await messagingModulePromise;
   const vapidKey = await resolveVapidKey();
+
+  if (!registration) {
+    return { status: "unsupported" as const };
+  }
 
   if (!vapidKey) {
     return { status: "error" as const, error: new Error("Missing VAPID key") };
@@ -65,6 +84,8 @@ export async function requestNotificationPermissionAndToken(user: User) {
     vapidKey,
     serviceWorkerRegistration: registration,
   });
+
+  console.info("FCM token obtained:", token ? "yes" : "no");
 
   if (!token) {
     return { status: "error" as const, error: new Error("No FCM token returned.") };
@@ -88,6 +109,8 @@ export async function saveFcmTokenForUser(user: User, token: string) {
     updatedAt: serverTimestamp(),
     enabled: true,
   });
+
+  console.info("FCM token saved to Firebase");
 }
 
 export async function listenForForegroundMessages(
@@ -100,11 +123,6 @@ export async function listenForForegroundMessages(
   const messaging = await getMessagingClient();
   const { onMessage } = await messagingModulePromise;
   return onMessage(messaging, callback);
-}
-
-export async function getPushRegistration() {
-  if (typeof window === "undefined" || !("serviceWorker" in navigator)) return null;
-  return navigator.serviceWorker.register("/firebase-messaging-sw.js");
 }
 
 export async function hasSavedFcmToken(user: User) {

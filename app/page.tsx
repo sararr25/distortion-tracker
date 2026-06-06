@@ -25,7 +25,7 @@ import { FriendLocation, useLocation } from "@/hooks/useLocation";
 import Lineup from "@/components/Lineup";
 import { getNearestStage } from "@/components/Map";
 import {
-  hasSavedFcmToken,
+  getPushRegistration,
   isPushSupported,
   listenForForegroundMessages,
   requestNotificationPermissionAndToken,
@@ -878,20 +878,13 @@ export default function Home() {
         }
 
         if (Notification.permission === "granted") {
-          const hasToken = await hasSavedFcmToken(user);
+          const tokenResult = await requestNotificationPermissionAndToken(user);
           if (cancelled) return;
-          if (!hasToken) {
-            const tokenResult = await requestNotificationPermissionAndToken(user);
-            if (cancelled) return;
-            setPushStatus(tokenResult.status === "enabled" ? "enabled" : "disabled");
-            return;
-          }
+          setPushStatus(tokenResult.status === "enabled" ? "enabled" : "error");
+          return;
         }
 
-        const hasToken = await hasSavedFcmToken(user);
-        if (cancelled) return;
-
-        setPushStatus(hasToken ? "enabled" : "disabled");
+        setPushStatus("disabled");
       } catch (error) {
         console.warn("Push support check failed:", error);
         if (!cancelled) setPushStatus("error");
@@ -918,7 +911,16 @@ export default function Home() {
 
         unsubscribeForeground = await listenForForegroundMessages((payload) => {
           const data = payload.data;
-          if (!data || data.type !== "meet" || !data.requestId || !data.fromUid || !data.fromName || !data.fromEmoji) {
+          if (!data) {
+            return;
+          }
+
+          if (data.type === "pulse") {
+            console.info("Foreground Pulse FCM received");
+            return;
+          }
+
+          if (data.type !== "meet" || !data.requestId || !data.fromUid || !data.fromName || !data.fromEmoji) {
             return;
           }
 
@@ -1137,14 +1139,9 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.register("/sw.js").catch((error) => {
-        console.warn("Service worker registration failed:", error);
-      });
-      void navigator.serviceWorker.register("/firebase-messaging-sw.js").catch((error) => {
-        console.warn("Messaging service worker registration failed:", error);
-      });
-    }
+    void getPushRegistration().catch((error) => {
+      console.warn("Messaging service worker registration failed:", error);
+    });
   }, []);
 
   useEffect(() => {
@@ -1535,16 +1532,43 @@ export default function Home() {
   const sendPulse = useCallback(async (recipients?: string[]) => {
     if (recipients && recipients.length === 0) return;
 
+    const senderUid = user?.uid ?? auth.currentUser?.uid;
+    if (!senderUid) return;
+
     triggerPulse(displayName, emoji, false);
     setPulseChooserOpen(false);
     await push(ref(db, "pulses"), {
       from: displayName,
       fromEmoji: emoji,
-      uid: auth.currentUser?.uid,
+      uid: senderUid,
       recipients: recipients ?? null,
       at: serverTimestamp(),
     });
-  }, [displayName, emoji, triggerPulse]);
+
+    void fetch("/api/send-pulse", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fromName: displayName,
+        fromEmoji: emoji,
+        senderUid,
+        recipients: recipients ?? null,
+      }),
+      keepalive: true,
+    })
+      .then(async (response) => {
+        const result = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(result?.error || "Pulse push request failed");
+        }
+        console.info("Pulse FCM result:", result);
+      })
+      .catch((error) => {
+        console.warn("Pulse FCM send failed:", error);
+      });
+  }, [displayName, emoji, triggerPulse, user?.uid]);
 
   const handleSendPulseToAll = useCallback(() => {
     void sendPulse();
