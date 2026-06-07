@@ -44,10 +44,21 @@ export function useLocation(
           if (!uid) return;
 
           const writeBaseLocation = (battery?: number | null) => {
+            // NOTE: heading from Geolocation API is only available when the device
+            // is physically moving. When stationary, coords.heading is null.
+            // On some Android devices heading may be unavailable entirely even when moving.
+            // The arrow is intentionally hidden when heading is null.
+            const heading =
+              typeof pos.coords.heading === "number" &&
+              !Number.isNaN(pos.coords.heading) &&
+              Number.isFinite(pos.coords.heading)
+                ? pos.coords.heading
+                : null;
+
             void set(ref(db, `locations/${uid}`), {
               lat: pos.coords.latitude,
               lng: pos.coords.longitude,
-              heading: pos.coords.heading ?? null,
+              heading,
               name: displayName || auth.currentUser?.displayName || "Anonymous",
               emoji,
               updatedAt: Date.now(),

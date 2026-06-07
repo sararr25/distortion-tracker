@@ -109,14 +109,22 @@ const FESTIVAL_ZONES: FestivalZone[] = [
 ];
 
 const POIS: FestivalPoi[] = [
-  { name: "BAR", emoji: "🍺", asset: "Bar.svg", lat: 55.690873, lng: 12.617855 },
-  { name: "BAR", emoji: "🍺", asset: "Bar.svg", lat: 55.689738, lng: 12.617685 },
-  { name: "WC", emoji: "🚻", asset: "WC.svg", lat: 55.689934, lng: 12.616594 },
-  { name: "WC", emoji: "🚻", asset: "WC.svg", lat: 55.69078, lng: 12.61603 },
-  { name: "LOCKERS", emoji: "🔒", asset: "Lockers.svg", lat: 55.689957, lng: 12.615269 },
-  { name: "ENTRANCE", emoji: "🚪", asset: "Entrance.svg", lat: 55.689672, lng: 12.615095 },
-  { name: "WATER", emoji: "💧", asset: "Water.svg", lat: 55.690488, lng: 12.617131 },
-  { name: "WATER", emoji: "💧", asset: "Water.svg", lat: 55.691081, lng: 12.616684 },
+  { name: "HANGAREN", emoji: "🏭", asset: "stage.png", lat: 55.6909, lng: 12.6095 },
+  { name: "RAVE", emoji: "🔊", asset: "stage.png", lat: 55.6897, lng: 12.6134 },
+  { name: "OASIS", emoji: "🌊", asset: "stage.png", lat: 55.6891, lng: 12.6174 },
+  { name: "SUNRISE", emoji: "🌅", asset: "stage.png", lat: 55.6889, lng: 12.6203 },
+  { name: "FOREST", emoji: "🌲", asset: "stage.png", lat: 55.6883, lng: 12.6148 },
+  { name: "SHADOW", emoji: "👤", asset: "stage.png", lat: 55.6889, lng: 12.6240 },
+  { name: "ENTRANCE", emoji: "🚪", asset: "entrance.png", lat: 55.6864, lng: 12.6106 },
+  { name: "LOCKERS", emoji: "🔒", asset: "lockers.png", lat: 55.6875, lng: 12.6067 },
+  { name: "FIRST AID", emoji: "🏥", asset: "firstaid.png", lat: 55.6905, lng: 12.6115 },
+  { name: "KIOSK", emoji: "🛒", asset: "kiosk.png", lat: 55.6878, lng: 12.6161 },
+  { name: "WC", emoji: "🚻", asset: "wc.png", lat: 55.6908, lng: 12.6095 },
+  { name: "WC", emoji: "🚻", asset: "wc.png", lat: 55.6905, lng: 12.6100 },
+  { name: "WC", emoji: "🚻", asset: "wc.png", lat: 55.6870, lng: 12.6144 },
+  { name: "WC", emoji: "🚻", asset: "wc.png", lat: 55.6870, lng: 12.6214 },
+  { name: "WATER", emoji: "💧", asset: "water.png", lat: 55.6888, lng: 12.6131 },
+  { name: "WATER", emoji: "💧", asset: "water.png", lat: 55.6875, lng: 12.6125 },
 ];
 
 function getNearestStage(lat: number, lng: number): string {
@@ -464,12 +472,63 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
       const color = isMe ? "#c3f400" : COLORS[colorIndex++ % COLORS.length];
       const label = escapeHtml(isMe ? "YOU" : loc.name.split(" ")[0] || "Guest");
       const emoji = escapeHtml(loc.emoji);
-      const hasHeading =
+      const hasHeading = (
+        loc.heading !== null &&
+        loc.heading !== undefined &&
         typeof loc.heading === "number" &&
         !Number.isNaN(loc.heading) &&
-        loc.heading >= 0 &&
-        loc.heading <= 360;
-      const rotation = hasHeading ? loc.heading : 0;
+        Number.isFinite(loc.heading)
+      );
+      const arrowHtml = hasHeading ? `
+        <div style="
+          position: absolute;
+          top: -14px;
+          left: 50%;
+          transform: translateX(-50%) rotate(${loc.heading}deg);
+          transform-origin: 50% 100%;
+          width: 0;
+          height: 0;
+          border-left: 5px solid transparent;
+          border-right: 5px solid transparent;
+          border-bottom: 12px solid ${color};
+          filter: drop-shadow(0 0 3px ${color});
+        "></div>
+      ` : "";
+      const pinHtml = `
+        <div style="
+          position: relative;
+          display: inline-flex;
+          flex-direction: column;
+          align-items: center;
+          pointer-events: none;
+        ">
+          ${arrowHtml}
+          <div style="
+            background: ${color};
+            color: #000;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 900;
+            box-shadow: 0 0 12px ${color};
+            border: 2px solid #000;
+            position: relative;
+          ">${emoji}</div>
+          <div style="
+            color: ${color};
+            font-size: 11px;
+            font-weight: 700;
+            text-align: center;
+            margin-top: 2px;
+            text-shadow: 0 0 6px ${color};
+            white-space: nowrap;
+          ">${label}</div>
+        </div>
+      `;
 
       if (process.env.NODE_ENV === "development") {
         console.log("Heading for", loc.name, ":", loc.heading);
@@ -477,51 +536,7 @@ export default function Map({ locations, currentUid, mapStyle, meetingPoint, onM
 
       const icon = L.divIcon({
         className: "festival-friend-marker",
-        html: `
-          <div style="
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            pointer-events: none;
-          ">
-            ${hasHeading ? `
-              <div style="
-                width: 0;
-                height: 0;
-                border-left: 6px solid transparent;
-                border-right: 6px solid transparent;
-                border-bottom: 12px solid ${color};
-                transform: rotate(${rotation}deg);
-                transform-origin: center center;
-                margin-bottom: 2px;
-                filter: drop-shadow(0 0 4px ${color});
-              "></div>
-            ` : ""}
-            <div style="
-              background: ${color};
-              color: #000;
-              border-radius: 50%;
-              width: 36px;
-              height: 36px;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-size: 18px;
-              font-weight: 900;
-              box-shadow: 0 0 12px ${color};
-              border: 2px solid #000;
-            ">${emoji}</div>
-            <div style="
-              color: ${color};
-              font-size: 11px;
-              font-weight: 700;
-              text-align: center;
-              margin-top: 2px;
-              text-shadow: 0 0 6px ${color};
-              white-space: nowrap;
-            ">${label}</div>
-          </div>
-        `,
+        html: pinHtml,
         iconAnchor: [18, 18],
       });
 
